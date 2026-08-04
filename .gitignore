@@ -12,3 +12,6 @@ references/
 # 日志
 *.log
 .DS_Store
+
+# WorkBuddy 本地记忆/配置（项目相关，但不入代码库）
+.workbuddy/
