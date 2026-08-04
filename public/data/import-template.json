@@ -1,0 +1,30 @@
+[
+  {
+    "title": "示例书名（必填）",
+    "call_no": "I0-00",
+    "isbn": "9787111111111",
+    "author": "作者",
+    "publisher": "出版社",
+    "year": "2020",
+    "price": "39.80",
+    "category": "文学类",
+    "tags": "标签1,标签2",
+    "location": "A1-01",
+    "intro": "一句话简介",
+    "total": 3
+  },
+  {
+    "title": "另一本示例书",
+    "call_no": "J0-01",
+    "isbn": "",
+    "author": "作者B",
+    "publisher": "出版社B",
+    "year": "2021",
+    "price": "58.00",
+    "category": "艺术类",
+    "tags": "Python,入门",
+    "location": "B1-03",
+    "intro": "简介内容",
+    "total": 2
+  }
+]

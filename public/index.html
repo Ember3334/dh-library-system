@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#c2693b" />
+  <link rel="manifest" href="./manifest.webmanifest" />
+  <title>数字人文学院图书室 · 智能管理系统</title>
+  <link rel="stylesheet" href="./css/style.css" />
+</head>
+<body>
+  <div id="bg-grid"></div>
+  <header id="topbar">
+    <div class="brand" onclick="location.hash='#/home'">
+      <div class="logo">DH</div>
+      <div class="brand-text">
+        <strong>数字人文学院图书室</strong>
+        <span>AI + 智能管理系统</span>
+      </div>
+    </div>
+    <nav id="nav"></nav>
+    <div id="user-area"></div>
+  </header>
+
+  <main id="app"></main>
+
+  <footer id="foot">
+    <span>数字人文学院图书室 · AI+管理服务 大赛参赛底座</span>
+    <span><a href="#/admin-login">管理后台入口</a> · 本地 / 云端均可运行 · 数据真实</span>
+  </footer>
+
+  <!-- AI 数字人助手悬浮入口 -->
+  <button id="ai-fab" title="AI 助手">
+    <svg class="ai-avatar-mini" viewBox="0 0 64 64" width="26" height="26"><circle cx="32" cy="32" r="30" fill="url(#aig)"/><ellipse cx="24" cy="28" rx="4" ry="5" fill="#2a1d10" class="eye-l"/><ellipse cx="40" cy="28" rx="4" ry="5" fill="#2a1d10" class="eye-r"/><path d="M28 42 Q32 46 36 42" stroke="#2a1d10" stroke-width="2.5" fill="none"/><defs><linearGradient id="aig" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e0892b"/><stop offset="1" stop-color="#c2693b"/></linearGradient></defs></svg>
+    <span>AI 助手</span>
+  </button>
+  <div id="ai-panel" class="hidden">
+    <div id="ai-head">
+      <div class="ai-persona">
+        <svg class="ai-avatar" viewBox="0 0 100 100" width="44" height="44">
+          <defs><linearGradient id="aip" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#e0892b"/><stop offset="1" stop-color="#cf7d3a"/></linearGradient></defs>
+          <circle cx="50" cy="50" r="46" fill="url(#aip)" stroke="rgba(255,255,255,.4)" stroke-width="2"/>
+          <ellipse class="eye-l" cx="36" cy="42" rx="6" ry="7" fill="#2a1d10"/>
+          <ellipse class="eye-r" cx="64" cy="42" rx="6" ry="7" fill="#2a1d10"/>
+          <path d="M42 64 Q50 72 58 64" stroke="#2a1d10" stroke-width="3.5" fill="none" stroke-linecap="round"/>
+          <circle cx="28" cy="56" r="4" fill="rgba(255,255,255,.35)"/>
+          <path d="M18 30 Q50 14 82 30" stroke="rgba(255,255,255,.25)" stroke-width="2" fill="none"/>
+        </svg>
+        <div>
+          <strong>数智馆员 · 小文</strong>
+          <small id="ai-status-line">数字人文专业 AI 助手</small>
+        </div>
+      </div>
+      <button id="ai-close">×</button>
+    </div>
+    <div id="ai-log"></div>
+    <div id="ai-input-row">
+      <input id="ai-input" placeholder="问我：推荐几本数字人文的书 / 有没有 Python 入门" />
+      <button id="ai-send">发送</button>
+    </div>
+  </div>
+
+  <div id="toast" class="hidden"></div>
+
+  <script>
+    if ('serviceWorker' in navigator && location.protocol !== 'file:') {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js').catch(() => {});
+      });
+    }
+  </script>
+
+  <script src="./config.js"></script>
+  <script src="./js/charts.js"></script>
+  <script src="./js/ai.js"></script>
+  <script src="./js/views.js"></script>
+  <script src="./js/app.js"></script>
+</body>
+</html>

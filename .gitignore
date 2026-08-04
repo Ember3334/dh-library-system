@@ -1,0 +1,14 @@
+# 依赖
+node_modules/
+
+# 运行时数据库（自动生成）
+data/*.db
+data/*.db-shm
+data/*.db-wal
+
+# 源资料大文件（本地保留，不入库）
+references/
+
+# 日志
+*.log
+.DS_Store

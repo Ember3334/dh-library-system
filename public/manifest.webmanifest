@@ -1,0 +1,14 @@
+{
+  "name": "数字人文学院智能图书室",
+  "short_name": "DH 图书室",
+  "description": "AI + 智能图书管理系统 · 馆藏检索 · 借阅审批 · 数据大屏",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f7efe2",
+  "theme_color": "#c2693b",
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}
