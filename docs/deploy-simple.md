@@ -62,42 +62,57 @@ Zeabur 是一个香港/台湾团队做的 PaaS 平台，对中文用户友好，
 
 > 本项目是轻量 Node.js + SQLite，**免费额度 $5/月足够长期运行一个实例**。额度用完后服务会暂停（数据保留），下个月自动恢复。
 
-### 部署步骤（图文级）
+### 部署步骤（图文级，按当前 Zeabur 界面）
 
 1. **准备 GitHub 仓库**
-   - 在 GitHub 新建一个仓库，例如 `dh-library`。
-   - 把本项目推上去：
-     ```bash
-     git init
-     git add .
-     git commit -m "initial"
-     git branch -M main
-     git remote add origin https://github.com/你的用户名/dh-library.git
-     git push -u origin main
-     ```
+   - 本项目已推送到 `https://github.com/Ember3334/dh-library-system.git`，可跳过。
 
 2. **注册/登录 Zeabur**
    - 打开 https://zeabur.com
    - 用 GitHub 账号一键登录。
 
-3. **创建项目并部署**
-   - 控制台点击 **"Deploy New Service"**（部署新服务）。
-   - 选择 **GitHub** → 选择你的 `dh-library` 仓库 → 点击 **Deploy**。
+3. **创建项目（不要进「服务器/Server」页面）**
+   - 登录后看**左侧边栏**，点 **「项目 / Projects」**（图标像文件夹，不是「服务器」）。
+   - 在项目列表页点 **「创建项目 / Create Project」**。
+   - 项目类型选 **「共享集群 / Shared Cluster」**（这是免费的；不要选「购买服务器」或「连接自己的集群」）。
+   - 如果当前界面只有「购买集群 / 连接自己的集群」两个选项，说明你的账号/地区默认进入了「创建服务器」弹窗，**点右上角 X 关闭它**，回到左侧栏重新进「项目」。
+
+4. **从 GitHub 部署服务**
+   - 进入项目后，点 **「部署新服务 / Deploy New Service」**。
+   - 选择 **GitHub** → 找到并勾选 `Ember3334/dh-library-system` → 点 **Connect / 连接**。
    - Zeabur 会自动识别 `package.json` 的 `start` 脚本（`node server/server.js`）并构建。
 
-4. **生成公开域名**
+5. **生成公开域名**
    - 部署成功后，进入服务详情 → **Domains**（域名）。
-   - 点击 **Generate Domain**，会得到类似：
+   - 点 **Generate Domain**，会得到类似：
      ```
      https://dh-library-demo.zeabur.app
      ```
 
-5. **访问系统**
+6. **访问系统**
    - 直接打开上面的网址，即可看到完整系统。
    - 管理员：`admin / admin123`，馆员：`librarian / lib12345`。
 
-6. **（可选）绑定自己的域名**
+7. **（可选）绑定自己的域名**
    - 在 Domains 里点 **Add Custom Domain**，按提示添加 CNAME 记录即可，SSL 自动配置。
+
+### 如果 Zeabur 始终要求买服务器 / 没有共享集群入口
+
+Zeabur 2026 年的界面在某些账号或地区下会先让你创建/购买集群。如果按上面步骤找不到「共享集群」，就直接换 **Render**（完全免费、无信用卡、对 Node.js 最友好）：
+
+1. 打开 https://render.com 并用 GitHub 登录。
+2. 控制台右上角点 **+ New → Web Service**。
+3. 选择 `Ember3334/dh-library-system` 仓库，点 **Connect**。
+4. 配置：
+   - Name：随便，如 `dh-library-system`
+   - Runtime：Node
+   - Build Command：`npm install`
+   - Start Command：`npm start`
+   - Instance Type：**Free**
+5. 点 **Create Web Service**，等 2–3 分钟，得到 `https://dh-library-system.onrender.com`。
+6. 把这个地址填进 `public/config.js` 的 `API_BASE` 和 `STATIC_BASE`，即可双击 `index.html` 使用。
+
+> Render Free 的缺点是 15 分钟无访问会自动休眠，首次打开要等待 30 秒左右「唤醒」。比赛演示时先访问一次即可。
 
 ### 注意事项
 
