@@ -1,0 +1,11 @@
+node_modules
+.git
+.gitignore
+.workbuddy
+data/*.db
+data/*.db-shm
+data/*.db-wal
+references
+*.log
+Dockerfile
+.dockerignore
