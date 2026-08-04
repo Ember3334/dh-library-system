@@ -1,6 +1,7 @@
 # 上线部署指南：从"本地运行"到"打开网址即看"
 
 > 目标：不再依赖 `localhost:3000`，让别人通过网址或双击 HTML 文件就能看到完整系统。
+> 更新说明（2026-08-04）：Render / Zeabur / Railway 等平台虽然提供免费实例，但目前新账号/部分地区要求绑定信用卡才能创建服务，**不适合没有信用卡的学生**。本文已按「0 信用卡、可长期使用」重新排序推荐方案。
 
 ---
 
@@ -13,7 +14,7 @@
    window.API_BASE = '';                 // 本地开发保持空字符串
    // window.API_BASE = 'https://你的域名'; // 远程部署时启用
    ```
-2. **后端开启 CORS**：`server.js` 已加入跨域支持，允许 `file://` 本地文件、GitHub Pages、静态托管站点调用后端接口。
+2. **后端开启 CORS**：`server.js` 已加入跨域支持，允许 `file://` 本地文件、GitHub Pages、静态托管站点调用后端接口（含登录用的 `Authorization` 头）。
 3. **前端接口与封面路径全部使用 `window.API_BASE`**：所有 `/api/...`、`/covers/...` 都会自动拼接远程域名。
 4. **首页资源改为相对路径**：CSS/JS/图片都改用 `./` 开头，双击 `index.html` 也能加载样式和脚本。
 
@@ -22,122 +23,46 @@
 | 方式 | 是否需要后端 | 操作难度 | 适合场景 |
 |------|-------------|---------|---------|
 | **A. 双击 HTML + 远程后端** | 是（后端已部署） | 极低 | 比赛答辩、给评委演示 |
-| **B. Zeabur 一键部署全栈** | 是（前后端一起部署） | 低 | 长期在线、分享链接 |
-| **C. CloudBase 国内 2000 人落地** | 是（云函数+云数据库） | 中 | 真正给学院师生使用 |
+| **B. CloudBase 免费环境部署** | 是（云托管容器） | 中 | 国内长期运行、真正给学院用 |
+| **C. Replit 免费部署** | 是（在线容器） | 低 | 零信用卡、快速给海外/小众展示 |
 
 ---
 
 ## 二、方式 A：双击 HTML 文件打开（最简单，5 分钟）
 
-适用于：你已经把后端部署到 Zeabur/CloudBase，但希望本地留个"离线可打开的入口"。
+适用于：你已经把后端部署到 CloudBase/Replit，希望本地留个「离线可打开的入口」。
 
 ### 步骤
 
-1. **先把后端按方式 B 部署到 Zeabur**，得到一个网址，例如：
+1. **先把后端按方式 B 或 C 部署出去**，得到一个网址，例如：
    ```
-   https://dh-library-demo.zeabur.app
+   https://dh-library-system-xxx.cloudbase.app
    ```
 2. **打开 `public/config.js`**，填入上面的域名：
    ```js
-   window.API_BASE = 'https://dh-library-demo.zeabur.app';
-   window.STATIC_BASE = 'https://dh-library-demo.zeabur.app';
+   window.API_BASE = 'https://dh-library-system-xxx.cloudbase.app';
+   window.STATIC_BASE = 'https://dh-library-system-xxx.cloudbase.app';
    ```
-3. **直接双击 `public/index.html`**，浏览器会打开 `file:///.../index.html`，页面会自动从远程后端拉取 696 本书、登录、借阅、评论、AI 全部可用。
+3. **直接双击 `public/index.html`**，浏览器会打开 `file:///.../index.html`，页面会自动从远程后端拉取 696 本书，登录、借阅、评论、AI 全部可用。
 
 > ⚠️ 注意：封面图片走远程后端的 `/covers/` 路径，如果远程后端没有上传封面，会显示自动生成的设计感占位封面（已有逻辑）。
 
 ---
 
-## 三、方式 B：Zeabur 一键部署全栈（推荐，比赛/分享）
+## 三、方式 B：腾讯云 CloudBase 免费环境（国内推荐，0 信用卡）
 
-Zeabur 是一个香港/台湾团队做的 PaaS 平台，对中文用户友好，支持 Node.js 一键部署，**免费额度足够跑本项目**。
+> 核心优势：国内访问快、新账号可创建 **1 个长期免费体验环境（3000 资源点/月）**、只需身份证实名认证、**不需要信用卡**。演示期几乎 0 费用，给学院 2000 人长期用也只需平滑升级到付费套餐。
 
-### 费用（2026 年 8 月）
-
-| 项目 | 免费额度 | 付费起步 | 是否推荐 |
-|------|---------|---------|---------|
-| Zeabur Free | **$5/月 compute credits**，无需信用卡 | $0 | ✅ 比赛/演示首选 |
-| Zeabur Dev | $5/月平台费 + 资源费 | ~$5/月起 | 需要日志保留 7 天、备份时 |
-| Zeabur Pro | $19/月 | ~$19/月起 | 团队协作/长期项目 |
-
-> 本项目是轻量 Node.js + SQLite，**免费额度 $5/月足够长期运行一个实例**。额度用完后服务会暂停（数据保留），下个月自动恢复。
-
-### 部署步骤（图文级，按当前 Zeabur 界面）
-
-1. **准备 GitHub 仓库**
-   - 本项目已推送到 `https://github.com/Ember3334/dh-library-system.git`，可跳过。
-
-2. **注册/登录 Zeabur**
-   - 打开 https://zeabur.com
-   - 用 GitHub 账号一键登录。
-
-3. **创建项目（不要进「服务器/Server」页面）**
-   - 登录后看**左侧边栏**，点 **「项目 / Projects」**（图标像文件夹，不是「服务器」）。
-   - 在项目列表页点 **「创建项目 / Create Project」**。
-   - 项目类型选 **「共享集群 / Shared Cluster」**（这是免费的；不要选「购买服务器」或「连接自己的集群」）。
-   - 如果当前界面只有「购买集群 / 连接自己的集群」两个选项，说明你的账号/地区默认进入了「创建服务器」弹窗，**点右上角 X 关闭它**，回到左侧栏重新进「项目」。
-
-4. **从 GitHub 部署服务**
-   - 进入项目后，点 **「部署新服务 / Deploy New Service」**。
-   - 选择 **GitHub** → 找到并勾选 `Ember3334/dh-library-system` → 点 **Connect / 连接**。
-   - Zeabur 会自动识别 `package.json` 的 `start` 脚本（`node server/server.js`）并构建。
-
-5. **生成公开域名**
-   - 部署成功后，进入服务详情 → **Domains**（域名）。
-   - 点 **Generate Domain**，会得到类似：
-     ```
-     https://dh-library-demo.zeabur.app
-     ```
-
-6. **访问系统**
-   - 直接打开上面的网址，即可看到完整系统。
-   - 管理员：`admin / admin123`，馆员：`librarian / lib12345`。
-
-7. **（可选）绑定自己的域名**
-   - 在 Domains 里点 **Add Custom Domain**，按提示添加 CNAME 记录即可，SSL 自动配置。
-
-### 如果 Zeabur 始终要求买服务器 / 没有共享集群入口
-
-Zeabur 2026 年的界面在某些账号或地区下会先让你创建/购买集群。如果按上面步骤找不到「共享集群」，就直接换 **Render**（完全免费、无信用卡、对 Node.js 最友好）：
-
-1. 打开 https://render.com 并用 GitHub 登录。
-2. 控制台右上角点 **+ New → Web Service**。
-3. 选择 `Ember3334/dh-library-system` 仓库，点 **Connect**。
-4. 配置：
-   - Name：随便，如 `dh-library-system`
-   - Runtime：Node
-   - Build Command：`npm install`
-   - Start Command：`npm start`
-   - Instance Type：**Free**
-5. 点 **Create Web Service**，等 2–3 分钟，得到 `https://dh-library-system.onrender.com`。
-6. 把这个地址填进 `public/config.js` 的 `API_BASE` 和 `STATIC_BASE`，即可双击 `index.html` 使用。
-
-> Render Free 的缺点是 15 分钟无访问会自动休眠，首次打开要等待 30 秒左右「唤醒」。比赛演示时先访问一次即可。
-
-### 注意事项
-
-- **SQLite 持久化**：Zeabur Free 的容器磁盘在重启后可能清空。比赛演示没问题；如果要长期保留数据，建议：
-  - 方式 1：定期导出数据库备份。
-  - 方式 2：升级到付费持久磁盘。
-  - 方式 3：按方式 C 迁移到 CloudBase 云数据库。
-
----
-
-## 四、方式 C：CloudBase 国内 2000 人长期落地
-
-如果最终目标是给数字人文学院 2000 名师生稳定使用，且要求国内访问速度快，推荐 **腾讯云 CloudBase**。
-
-### 费用（2026 年 8 月）
+### 费用（2026 年 8 月，来自腾讯云官方文档）
 
 | 项目 | 免费额度 | 超出后费用 | 说明 |
 |------|---------|-----------|------|
-| CloudBase 环境 | **1 个免费环境/账号，3000 资源点/月** | 按量计费 | 新账号足够起步 |
-| 静态网站托管 | 按流量/容量 | 低 | 前端放这里 |
-| 云托管 CloudRun | 按容器规格和运行时长 | 约 ¥0.05/GB·小时起 | 后端放这里 |
-| 云数据库 MySQL | 按容量/请求 | 约 ¥0.1/GB·月起 | 替代 SQLite |
-| 云存储 | 按容量/流量 | 低 | 封面图片可放这里 |
+| **CloudBase 免费体验环境** | **3000 资源点/月** | 不允许超（需升级付费环境） | 新账号可创建 1 个，长期有效，可续期 |
+| 云托管 CloudRun | 包含在环境资源点内 | 约 55 点/核·小时 + 32 点/GB·小时 | 跑 Node.js 后端 |
+| 静态网站托管 | 1 GB 存储免费 | 按容量/流量 | 前端 `public/` 放这里 |
+| 云数据库 MySQL | 免费环境暂不支持 | 升级后约 ¥0.1/GB·月起 | 长期 2000 人落地时迁移 |
 
-> 实际给 2000 人使用时，预计月费在 **¥30–100** 区间（取决于活跃度和图片存储量），学生项目可申请腾讯云"云+校园"等学生优惠进一步降低。
+> 换算：1000 资源点 = 0.1 元。3000 点/月 ≈ 0.3 元等值资源，对轻量演示完全够用。
 
 ### 部署架构
 
@@ -148,35 +73,150 @@ CloudBase 静态网站托管（public/ 目录）
     ↓ 调用 API
 CloudBase 云托管 / 云函数（server/ 后端）
     ↓ 读写
-CloudBase MySQL（替代 SQLite）
+容器内 SQLite（演示期） → 后期迁移到 CloudBase MySQL
 ```
 
-### 迁移要点
+### 详细部署步骤
 
-1. **数据库迁移**：把 `data/library.db` 导出为 SQL，导入 CloudBase MySQL。
-2. **后端适配**：将 `server/server.js` 中的 SQLite 查询改为 MySQL 查询（可用 `mysql2` 包），或直接部署为 CloudRun 容器保留 SQLite（不推荐长期用）。
-3. **前端部署**：把 `public/` 目录上传到 CloudBase 静态托管，修改 `config.js` 中的 `API_BASE` 为云托管域名。
-4. **域名备案**：如果绑定自己的 `.cn`/`.com` 域名，需要 ICP 备案；使用学校域名可由学校统一备案。
+#### 1. 注册与实名认证
 
-> 详细迁移步骤见 `docs/deployment-guide-2000.md`。
+1. 打开 https://cloud.tencent.com
+2. 用微信/QQ/邮箱注册腾讯云账号。
+3. 进入 **控制台 → 账号信息 → 实名认证**。
+4. 选择「个人认证」，上传身份证正反面，完成人脸识别。
+   > 这是国内云服务的合规要求，**不需要绑定信用卡/银行卡**即可使用免费额度。
+
+#### 2. 创建 CloudBase 免费体验环境
+
+1. 进入 **云开发 CloudBase 控制台**：https://console.cloud.tencent.com/tcb
+2. 点击 **「新建环境」**。
+3. 在套餐选择页，找到 **「免费体验版」**（或「免费体验环境」），点 **「立即创建」**。
+   - 套餐说明：3000 资源点/月，1 个环境，可续期。
+4. 等待环境初始化完成（约 1–2 分钟）。
+
+#### 3. 部署后端到「云托管 CloudRun」
+
+> 推荐用「上传代码包」方式，学习成本最低。
+
+1. 在本地项目根目录，把后端相关文件打包（不要包含 `node_modules`、`data/*.db`、`.git`）：
+   ```bash
+   cd D:/workbuddyxiangmu/数字人文学院图书管理系统
+   #  Windows PowerShell 示例
+   Compress-Archive -Path server,package.json,public,data -DestinationPath dh-library-deploy.zip
+   ```
+2. 回到 CloudBase 控制台，进入刚创建的环境。
+3. 左侧菜单选择 **云托管 → 服务列表 → 新建服务**。
+4. 填写服务信息：
+   - 服务名称：`dh-library-system`
+   - 地域：选离你最近的（如广州/上海）
+   - 流量策略：100%（默认）
+5. 选择 **「新建版本」** → **「通过代码包上传」** → 上传刚才的 `dh-library-deploy.zip`。
+6. 填写构建与启动命令：
+   - 构建命令：`npm install`
+   - 启动命令：`npm start`
+   - 监听端口：`3000`
+7. 实例规格：选 **最小规格**（0.25 核 / 0.5 GB 内存即可，免费额度内）。
+8. 点 **开始部署**，等待 3–5 分钟。
+9. 部署成功后，服务详情页会显示访问地址，例如：
+   ```
+   https://dh-library-system-xxx.cloudbaseapp.cn
+   ```
+
+> ⚠️ 云托管的容器重启后，SQLite 文件可能丢失。**比赛演示没问题**；若要长期保留数据，建议定期导出 `data/library.db` 备份，或参考 `docs/deployment-guide-2000.md` 迁移到 CloudBase MySQL。
+
+#### 4. 部署前端到「静态网站托管」
+
+1. 在 CloudBase 控制台，左侧菜单选 **静态网站托管 → 开通**（按提示操作）。
+2. 进入静态托管后，点 **「上传文件/文件夹」**。
+3. 上传 `public/` 目录下的所有内容（`index.html`、`css/`、`js/`、`covers/`、`config.js` 等）。
+4. 上传完成后，静态托管会给你一个默认域名，例如：
+   ```
+   https://dh-library-static-xxx.cloudbaseapp.cn
+   ```
+5. 打开你上传的 `config.js`，把 `API_BASE` 和 `STATIC_BASE` 改成云托管域名：
+   ```js
+   window.API_BASE = 'https://dh-library-system-xxx.cloudbaseapp.cn';
+   window.STATIC_BASE = 'https://dh-library-system-xxx.cloudbaseapp.cn';
+   ```
+6. 保存后重新上传 `config.js`。
+
+#### 5. 访问系统
+
+- 直接打开静态托管域名：`https://dh-library-static-xxx.cloudbaseapp.cn`
+- 管理员：`admin / admin123`
+- 馆员：`librarian / lib12345`
+
+#### 6. 绑定自己的域名（可选）
+
+- 在静态托管和云托管的「域名管理」里添加自定义域名。
+- 如果域名是 `.cn`/`.com` 等国内可解析域名，需要 **ICP 备案**。
+- 如果只是比赛/演示，用 CloudBase 默认域名即可，无需备案。
 
 ---
 
-## 五、三种方式费用对比总表
+## 四、方式 C：Replit 免费部署（备选，0 信用卡）
+
+> 如果你不想做国内实名认证，或者想 5 分钟快速上线给少数人看，可以用 Replit。
+
+### 费用与限制（2026 年 8 月）
+
+| 项目 | 免费 Starter | 说明 |
+|------|-------------|------|
+| 价格 | **$0** | 不需要信用卡 |
+| 资源 | 0.5 vCPU / 1 GB RAM / 2 GB 存储 | 够跑本项目 |
+| 发布数量 | **1 个 App** | 免费账号只能发布 1 个 |
+| 休眠 | 5 分钟无访问会 sleep | 首次访问需等待 10–30 秒唤醒 |
+| 代码可见性 | 公开 | 免费版项目公开 |
+
+### 部署步骤
+
+1. 打开 https://replit.com，用 GitHub 账号登录。
+2. 点击 **Create → Import from GitHub**。
+3. 粘贴仓库地址：`https://github.com/Ember3334/dh-library-system.git`
+4. Replit 会自动识别为 Node.js 项目。
+5. 在 `.replit` 或运行配置里确保启动命令是 `npm start`。
+6. 点击顶部 **Run**，等待依赖安装。
+7. 运行后，右侧会显示一个 URL，例如：
+   ```
+   https://dh-library-system.yourname.repl.co
+   ```
+8. 打开 `public/config.js`，填入该 URL：
+   ```js
+   window.API_BASE = 'https://dh-library-system.yourname.repl.co';
+   window.STATIC_BASE = 'https://dh-library-system.yourname.repl.co';
+   ```
+9. 把 `public/` 目录作为静态网站单独部署，或直接把 Replit URL 发给对方，在浏览器打开。
+
+> 注意：Replit 免费版冷启动慢，且项目公开。比赛演示前一定要先访问一次「唤醒」实例。
+
+---
+
+## 五、为什么不推荐 Render / Zeabur / Railway？
+
+| 平台 | 问题 | 结论 |
+|------|------|------|
+| **Render** | Free 实例在点击 Deploy 时会弹出「Add Card」要求绑定信用卡 | ❌ 不适合学生 |
+| **Zeabur** | 部分地区/新账号没有「共享集群」入口，只能购买/连接服务器 | ❌ 对你的账号不可用 |
+| **Railway** | 2023 年 8 月起，即使 Free Trial 也要绑定信用卡 | ❌ 不适合学生 |
+| **Cyclic** | 已于 2024 年 5 月关闭免费托管服务 | ❌ 已不可用 |
+
+---
+
+## 六、三种可用方案费用对比总表
 
 | 平台 | 月费（演示期） | 月费（2000 人） | 国内速度 | 学习成本 | 推荐阶段 |
 |------|---------------|-----------------|---------|---------|---------|
-| **Zeabur Free** | **$0** | 不适合 | 快（香港/新加坡） | 极低 | 比赛演示、分享链接 |
-| **CloudBase 免费环境** | **¥0–30** | ¥30–100 | 极快 | 中 | 国内长期运行 |
-| **Render Free** | **$0** | 不适合 | 较慢（美西） | 低 | 海外访问/备选 |
+| **CloudBase 免费体验环境** | **¥0** | ¥30–100（升级后） | 极快 | 中 | **国内长期运行首选** |
+| **Replit Starter** | **$0** | 不适合 | 一般 | 低 | 零信用卡、快速展示 |
 | **GitHub Pages 纯静态** | **$0** | 无后端 | 快 | 极低 | 只展示界面，无交互 |
 
 ---
 
-## 六、最终推荐
+## 七、最终推荐
 
-- **现在（比赛/演示）**：用 **Zeabur Free**，5 分钟出网址，0 费用，国内访问流畅。
-- **比赛前给评委展示**：用 **方式 A（双击 HTML + Zeabur 后端）**，评委无需装任何环境，打开文件即用。
-- **学院 2000 人真正落地**：用 **CloudBase**，迁移到 MySQL，月费可控，国内速度快。
+- **现在（比赛/演示，不想花钱、不想绑卡）**：用 **CloudBase 免费体验环境**，身份证实名后即可部署，国内访问快。
+- **比赛前给评委展示**：用 **方式 A（双击 HTML + CloudBase 后端）**，评委无需装任何环境，打开文件即用。
+- **学院 2000 人真正落地**：继续用 **CloudBase**，把 SQLite 迁移到 CloudBase MySQL，升级到个人版/标准版，月费可控。
+- **如果你连国内实名都不想弄**：用 **Replit**，但接受冷启动慢和项目公开的限制。
 
-**你现在就可以开始**：先注册 Zeabur → 推 GitHub 仓库 → 拿到网址 → 填入 `public/config.js` → 双击 `index.html` 验证。
+**你现在就可以开始**：注册腾讯云 → 实名认证 → 创建 CloudBase 免费环境 → 按步骤 3 部署后端 → 拿到网址 → 填入 `public/config.js` → 双击 `index.html` 验证。
