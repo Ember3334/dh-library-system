@@ -29,30 +29,42 @@ const Views = (() => {
       const ctx = this.canvas.getContext('2d'); ctx.scale(this.dpr, this.dpr);
     }
     build() {
-      const palette = { '文学类': '#e6923c', '艺术类': '#e07aa8', '历史': '#5aa6a8', '思政综合类': '#c79a3f', default: '#a87c45' };
+      const palette = { '文学类': '#e88b2c', '艺术类': '#e070a0', '历史': '#3aa0a2', '思政综合类': '#b8892e', default: '#a87c45' };
+      // 环境星兜底：无书籍数据时，生成纯装饰星点，canvas 永不空白
+      if (!this.books || !this.books.length) {
+        this.stars = Array.from({ length: 64 }, (_, k) => ({
+          id: 'amb' + k, book: null,
+          x: 0.04 + Math.random() * 0.92, y: 0.06 + Math.random() * 0.86,
+          base: 0.5 + Math.random() * 1.1, phase: Math.random() * Math.PI * 2, speed: 0.4 + Math.random() * 1.2,
+          color: palette.default, ring: 0, pulse: 0, scale: 1, targetScale: 1
+        }));
+        return;
+      }
       this.stars = this.books.map((b, i) => ({
         id: b.id, book: b,
-        x: 0.06 + Math.random() * 0.88, y: 0.08 + Math.random() * 0.80,
-        base: 0.6 + Math.random() * 1.6, phase: Math.random() * Math.PI * 2, speed: 0.5 + Math.random() * 1.5,
+        x: 0.06 + Math.random() * 0.88, y: 0.10 + Math.random() * 0.76,
+        base: 0.9 + Math.random() * 1.8, phase: Math.random() * Math.PI * 2, speed: 0.5 + Math.random() * 1.5,
         color: palette[b.category] || palette.default,
-        ring: 0, pulse: 0
+        ring: 0, pulse: 0, scale: 0, targetScale: 1
       }));
       // 避免重叠：简单排斥迭代
-      for (let k = 0; k < 30; k++) {
+      for (let k = 0; k < 36; k++) {
         for (let i = 0; i < this.stars.length; i++) {
           for (let j = i + 1; j < this.stars.length; j++) {
             const a = this.stars[i], c = this.stars[j];
             const dx = (a.x - c.x) * this.w, dy = (a.y - c.y) * this.h;
             const d = Math.hypot(dx, dy);
-            const min = 42;
+            const min = 52;
             if (d < min && d > 0) {
-              const ux = dx / d, uy = dy / d; const f = (min - d) * 0.03 / this.w;
-              a.x = Math.max(0.04, Math.min(0.96, a.x + ux * f)); a.y = Math.max(0.06, Math.min(0.94, a.y + uy * f));
-              c.x = Math.max(0.04, Math.min(0.96, c.x - ux * f)); c.y = Math.max(0.06, Math.min(0.94, c.y - uy * f));
+              const ux = dx / d, uy = dy / d; const f = (min - d) * 0.035 / this.w;
+              a.x = Math.max(0.04, Math.min(0.96, a.x + ux * f)); a.y = Math.max(0.08, Math.min(0.92, a.y + uy * f));
+              c.x = Math.max(0.04, Math.min(0.96, c.x - ux * f)); c.y = Math.max(0.08, Math.min(0.92, c.y - uy * f));
             }
           }
         }
       }
+      // 入场动画：依次放大
+      this.stars.forEach((s, i) => { setTimeout(() => { s.targetScale = 1; }, i * 12 + 60); });
     }
     bind() {
       this.canvas.addEventListener('mousemove', e => {
@@ -62,13 +74,14 @@ const Views = (() => {
         this.stars.forEach(s => {
           const r = 5 + s.base * 3;
           const d = Math.hypot((s.x - mx) * this.w, (s.y - my) * this.h);
-          if (d < r + 8 && d < best) { best = d; hit = s.id; }
+          if (s.book && d < r + 8 && d < best) { best = d; hit = s.id; }
         });
         this.hoverId = hit;
         this.canvas.style.cursor = hit ? 'pointer' : 'default';
       });
       this.canvas.addEventListener('click', e => {
-        if (this.hoverId) location.hash = '#/book/' + this.hoverId;
+        const s = this.stars.find(x => x.id === this.hoverId);
+        if (s && s.book) location.hash = '#/book/' + s.id;
       });
     }
     encounter() {
@@ -105,7 +118,7 @@ const Views = (() => {
         const hover = this.hoverId === s.id;
         const pulse = s.pulse > 0 ? (1 - s.pulse) * 12 : 0;
         const r = (3 + s.base * 2.2 + pulse) * (hover ? 1.35 : 1);
-        const alpha = s.book.available > 0 ? 0.9 : 0.45;
+        const alpha = s.book ? (s.book.available > 0 ? 0.9 : 0.45) : 0.5;
         ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
         ctx.fillStyle = s.color; ctx.globalAlpha = alpha * twinkle;
         ctx.shadowColor = s.color; ctx.shadowBlur = hover ? 22 : (12 + pulse);
@@ -114,7 +127,7 @@ const Views = (() => {
         const g = ctx.createRadialGradient(x, y, 0, x, y, r * 2.5);
         g.addColorStop(0, s.color); g.addColorStop(1, 'transparent');
         ctx.fillStyle = g; ctx.globalAlpha = alpha * 0.18; ctx.beginPath(); ctx.arc(x, y, r * 2.5, 0, Math.PI * 2); ctx.fill();
-        if (hover || this.encounterId === s.id) {
+        if (s.book && (hover || this.encounterId === s.id)) {
           ctx.globalAlpha = 1;
           ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--txt').trim() || '#3b2f23';
           ctx.font = '13px PingFang SC, Microsoft YaHei'; ctx.textAlign = 'center';
@@ -187,13 +200,28 @@ const Views = (() => {
         <div class="ticker" id="ticker"><span class="ticker-label">实时动态</span><div class="ticker-track" id="ticker-track"><span class="muted">连接中…</span></div></div>
       </section>
       <div class="star-wrap">
+        <div class="star-head">
+          <div>
+            <div class="star-title">✨ 知识星空</div>
+            <div class="star-sub">${f.cat ? '当前分类：' + esc(f.cat) : '点击星星查看图书 · 悬停显示书名 · 随机邂逅一本好书'}</div>
+          </div>
+          <span class="star-count" id="star-count">—</span>
+        </div>
         <canvas id="star-canvas" class="star-canvas"></canvas>
         <div class="star-legend">
           <span><i class="dot lit"></i>可借</span>
           <span><i class="dot dim"></i>已借完</span>
           <span>✨ 点击星星查看图书</span>
         </div>
-      </div>`;
+        <div class="star-loader" id="star-loader"><span></span><span></span><span></span></div>
+      </div>
+      <section class="cat-books" id="cat-books" style="display:none">
+        <div class="section-head">
+          <h3 id="cat-title">分类精选</h3>
+          <a class="btn ghost sm" href="#/books" id="cat-more">查看全部 →</a>
+        </div>
+        <div class="book-grid" id="cat-grid"></div>
+      </section>`;
     $('#ai-btn').addEventListener('click', () => { if (window.AIWidget) AIWidget.toggle(); });
     $('#encounter-btn').addEventListener('click', () => { if (starScene) starScene.encounter(); });
     $('#q').addEventListener('input', e => { f.q = e.target.value; loadStars(); });
@@ -212,11 +240,60 @@ const Views = (() => {
   async function loadStars() {
     const wrap = $('.star-wrap'); if (!wrap) return;
     wrap.classList.add('loading');
-    const r = await API.stars({ q: f.q, category: f.cat });
-    wrap.classList.remove('loading');
-    const canvas = $('#star-canvas');
-    if (starScene) starScene.destroy();
-    starScene = new StarScene(canvas, r.stars || []);
+    try {
+      const [r, booksResp] = await Promise.all([
+        API.stars({ q: f.q, category: f.cat }),
+        API.books({ category: f.cat, limit: 8 })
+      ]);
+      const stars = (r && r.stars) || [];
+      const canvas = $('#star-canvas');
+      if (starScene) starScene.destroy();
+      starScene = new StarScene(canvas, stars);
+      const count = $('#star-count'); if (count) count.textContent = stars.length + ' 本';
+      renderCatBooks((booksResp && booksResp.books) || [], f.cat);
+    } catch (e) {
+      console.warn('[stars] 加载失败，启用环境星兜底', e);
+      const canvas = $('#star-canvas');
+      if (starScene) starScene.destroy();
+      starScene = new StarScene(canvas, []);
+      const count = $('#star-count'); if (count) count.textContent = '—';
+      renderCatBooks([], f.cat);
+    } finally {
+      wrap.classList.remove('loading');
+    }
+  }
+  function fillGrid(grid, list) {
+    grid.innerHTML = list.map(b => bookCard(b)).join('');
+    grid.querySelectorAll('.book-card').forEach((c, i) => {
+      c.style.opacity = '0'; c.style.transform = 'translateY(16px)';
+      setTimeout(() => { c.style.transition = 'opacity .35s, transform .35s'; c.style.opacity = '1'; c.style.transform = 'translateY(0)'; }, i * 40);
+    });
+    grid.querySelectorAll('.book-card').forEach(c => c.onclick = () => location.hash = '#/book/' + c.dataset.id);
+  }
+  function renderCatBooks(books, cat) {
+    const sec = $('#cat-books'); const grid = $('#cat-grid'); const title = $('#cat-title'); const more = $('#cat-more');
+    if (!sec) return;
+    const list = books || [];
+    if (list.length) {
+      sec.style.display = 'block';
+      if (title) title.textContent = cat ? (cat + ' · 精选') : '✨ 精选推荐';
+      if (more) more.href = cat ? ('#/books?category=' + encodeURIComponent(cat)) : '#/books';
+      fillGrid(grid, list);
+      return;
+    }
+    // 无数据：未选分类时回退拉取「精选推荐」，确保页面不空、有关联感
+    if (!cat) {
+      API.books({ limit: 8 }).then(rec => {
+        const b = (rec && rec.books) || [];
+        if (!b.length) { sec.style.display = 'none'; return; }
+        sec.style.display = 'block';
+        if (title) title.textContent = '✨ 精选推荐';
+        if (more) more.href = '#/books';
+        fillGrid(grid, b);
+      }).catch(() => { sec.style.display = 'none'; });
+      return;
+    }
+    sec.style.display = 'none';
   }
 
   async function loadStory() {
@@ -798,11 +875,11 @@ const Views = (() => {
   // ---------------- 公开排行榜 ----------------
   async function rankings() {
     const r = await API.rankings();
-    const listItem = (b, i, cLabel) => `<div class="rank-item" data-id="${b.id}">
+    const listItem = (b, i, cVal, cLabel) => `<div class="rank-item" data-id="${b.id}">
       <div class="rank-no ${i < 3 ? 'top' : ''}">${i + 1}</div>
       <div class="mini" style="background:${colorFor(b.title)}">${(b.title || '?').slice(0, 1)}</div>
       <div class="info"><h4>${b.title} <small class="muted">${b.author || ''}</small></h4><p>${b.category || ''}</p></div>
-      <div class="rank-count">${b.c} <small>${cLabel}</small></div>
+      <div class="rank-count">${cVal} <small>${cLabel}</small></div>
     </div>`;
     const readerItem = (u, i) => `<div class="rank-item">
       <div class="rank-no ${i < 3 ? 'top' : ''}">${i + 1}</div>
@@ -810,31 +887,30 @@ const Views = (() => {
       <div class="info"><h4>${u.displayName} <small class="muted">${u.dept || ''}</small></h4></div>
       <div class="rank-count">${u.count} <small>本</small></div>
     </div>`;
+    const demoNote = r.demo ? `<div class="demo-note">📌 本页含 <b>10 位虚拟读者</b> 的演示数据，仅用于作品展示，非真实借阅记录</div>` : '';
     app().innerHTML = `<h2 style="margin-bottom:4px">📚 图书流动排行榜</h2>
       <p class="muted" style="font-size:13px;margin-bottom:16px">公开馆藏流动数据 · 隐私信息已匿名化</p>
+      ${demoNote}
       <div class="rank-grid">
         <div class="card"><div class="panel-title">🔥 最受欢迎 Top10</div><div id="rank-hot"></div></div>
         <div class="card"><div class="panel-title">🧊 冷门宝藏 Top10</div><div id="rank-cold"></div></div>
         <div class="card"><div class="panel-title">⭐ 借阅之星 Top10</div><div id="rank-readers"></div></div>
         <div class="card"><div class="panel-title">💬 好评榜 Top10</div><div id="rank-review"></div></div>
       </div>`;
-    $('#rank-hot').innerHTML = (r.hot && r.hot.length) ? r.hot.map((b, i) => listItem(b, i, '次借阅')).join('') : '<div class="empty">暂无数据</div>';
-    $('#rank-cold').innerHTML = (r.cold && r.cold.length) ? r.cold.map((b, i) => listItem(b, i, '次借阅')).join('') : '<div class="empty">暂无数据</div>';
+    $('#rank-hot').innerHTML = (r.hot && r.hot.length) ? r.hot.map((b, i) => listItem(b, i, b.c, '次借阅')).join('') : '<div class="empty">暂无数据</div>';
+    $('#rank-cold').innerHTML = (r.cold && r.cold.length) ? r.cold.map((b, i) => listItem(b, i, b.c, '次借阅')).join('') : '<div class="empty">暂无数据</div>';
     $('#rank-readers').innerHTML = (r.readers && r.readers.length) ? r.readers.map((u, i) => readerItem(u, i)).join('') : '<div class="empty">暂无数据</div>';
-    $('#rank-review').innerHTML = (r.reviewTop && r.reviewTop.length) ? r.reviewTop.map((b, i) => `<div class="rank-item" data-id="${b.id}">
-      <div class="rank-no ${i < 3 ? 'top' : ''}">${i + 1}</div>
-      <div class="mini" style="background:${colorFor(b.title)}">${(b.title || '?').slice(0, 1)}</div>
-      <div class="info"><h4>${b.title} <small class="muted">${b.author || ''}</small></h4><p>${b.category || ''}</p></div>
-      <div class="rank-count">${b.avg} <small>分 · ${b.n}评</small></div>
-    </div>`).join('') : '<div class="empty">暂无评论数据</div>';
+    $('#rank-review').innerHTML = (r.reviewTop && r.reviewTop.length) ? r.reviewTop.map((b, i) => listItem(b, i, b.avg, '分 · ' + b.n + '评')).join('') : '<div class="empty">暂无评论数据</div>';
     $$('.rank-item[data-id]').forEach(el => el.onclick = () => location.hash = '#/book/' + el.dataset.id);
   }
 
   // ---------------- 数字人文分析 ----------------
   async function dh() {
     const r = await API.dh();
+    const demoNote = r.demo ? `<div class="demo-note">📌 本页含 <b>10 位虚拟读者</b> 的演示数据，仅用于作品展示，非真实借阅记录</div>` : '';
     app().innerHTML = `<h2 style="margin-bottom:4px">🧭 数字人文分析</h2>
       <p class="muted" style="font-size:13px;margin-bottom:16px">用数字人文方法分析馆藏与借阅：分类热度 · 时间序列 · 标签云 · 读者-书籍网络</p>
+      ${demoNote}
       <div class="dh-grid">
         <div class="card"><div class="panel-title">分类借阅热度</div><canvas id="dh-cat" height="260"></canvas></div>
         <div class="card"><div class="panel-title">近 90 天借阅时间序列</div><canvas id="dh-ts" height="260"></canvas></div>

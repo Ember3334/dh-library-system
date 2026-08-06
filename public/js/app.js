@@ -162,12 +162,22 @@ function route() {
   app.scrollTop = 0;
   if (window._screenTimer) { clearInterval(window._screenTimer); window._screenTimer = null; }
   if (window.Views && Views.cleanupStars) Views.cleanupStars();
-  const run = async (fn) => { try { await fn(); } catch (e) { app.innerHTML = `<div class="empty">加载失败：${e.message}<br><a href="#/home">返回首页</a></div>`; } };
+  const run = async (fn) => {
+    try { await fn(); }
+    catch (e) { app.innerHTML = `<div class="empty">加载失败：${e.message}<br><a href="#/home">返回首页</a></div>`; }
+    finally { paint(); }
+  };
+  function paint() {
+    if (!app) return;
+    app.classList.remove('view-in');
+    void app.offsetWidth; // 强制重排以重启动画
+    app.classList.add('view-in');
+  }
 
   if (hash.startsWith('#/book/')) return run(() => Views.bookDetail(hash.split('/')[2]));
-  if (hash === '#/login') return Views.login();
-  if (hash === '#/register') return Views.register();
-  if (hash === '#/admin-login') return Views.adminLogin();
+  if (hash === '#/login') return run(Views.login);
+  if (hash === '#/register') return run(Views.register);
+  if (hash === '#/admin-login') return run(Views.adminLogin);
   if (hash === '#/rankings') return run(Views.rankings);
   if (hash === '#/dh') return run(Views.dh);
   if (hash === '#/screen') {
@@ -180,7 +190,7 @@ function route() {
       toast('需要馆员或管理员权限', 'err'); location.hash = '#/home'; return;
     }
     if (hash === '#/admin/catalog') return run(Views.adminCatalog);
-    if (hash === '#/admin/import') return Views.adminImport();
+    if (hash === '#/admin/import') return run(Views.adminImport);
     if (hash === '#/admin/readers') return run(Views.adminReaders);
     if (hash === '#/admin/loans') return run(Views.adminLoans);
     return run(Views.admin);

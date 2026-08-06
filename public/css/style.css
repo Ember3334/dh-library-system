@@ -27,6 +27,11 @@ a{color:var(--accent);text-decoration:none}
 button{font-family:inherit;cursor:pointer;border:none}
 .hidden{display:none !important}
 
+/* 路由切换淡入转场：消除「突然冒出」 */
+#app.view-in{animation:viewIn .42s cubic-bezier(.22,.7,.3,1) both}
+@keyframes viewIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce){ #app.view-in{animation:none} }
+
 /* 顶栏 */
 #topbar{
   position:sticky; top:0; z-index:50; display:flex; align-items:center; gap:18px;
@@ -95,6 +100,12 @@ button{font-family:inherit;cursor:pointer;border:none}
 .star-legend .dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:5px}
 .star-legend .dot.lit{background:var(--ai);box-shadow:0 0 8px var(--ai)}
 .star-legend .dot.dim{background:var(--dim);opacity:.5}
+.star-loader{position:absolute;top:18px;right:18px;display:none;gap:6px;align-items:center;z-index:3}
+.star-wrap.loading .star-loader{display:flex}
+.star-loader span{width:8px;height:8px;border-radius:50%;background:var(--accent);animation:dots 1s infinite both}
+.star-loader span:nth-child(2){animation-delay:.18s}
+.star-loader span:nth-child(3){animation-delay:.36s}
+@keyframes dots{0%,100%{opacity:.3;transform:scale(.7)}50%{opacity:1;transform:scale(1)}}
 
 /* 图书网格 */
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:18px}
@@ -301,8 +312,13 @@ body,#topbar,.card,.kpi,.book-card,.btn,.nav-ai,.nav-theme,.chip,.tab,.borrow-it
 .ai-persona small{display:block;font-size:11px;color:var(--muted)}
 
 /* 排行榜 */
-.rank-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
-@media(max-width:880px){.rank-grid{grid-template-columns:1fr}}
+.rank-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;align-items:stretch}
+.rank-grid>.card{display:flex;flex-direction:column}
+.rank-grid>.card>div:last-child{flex:1}
+@media(max-width:1100px){.rank-grid{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:640px){.rank-grid{grid-template-columns:1fr}}
+.demo-note{background:rgba(224,137,43,.12);border:1px solid rgba(224,137,43,.4);color:#8a5a1e;padding:10px 14px;border-radius:12px;font-size:13px;margin-bottom:16px;line-height:1.6}
+.demo-note b{color:var(--accent)}
 .rank-item{display:flex;align-items:center;gap:12px;padding:10px 12px;border-bottom:1px solid var(--line);cursor:pointer;transition:.2s}
 .rank-item:hover{background:rgba(194,106,59,.06)}
 .rank-item:last-child{border-bottom:none}

@@ -96,7 +96,7 @@ app.get('/api/rankings', (req, res) => {
   const reviewTop = db.prepare(`SELECT b.id, b.title, b.author, b.category, ROUND(AVG(c.sentiment),2) avg, COUNT(c.id) n
     FROM books b JOIN comments c ON b.id=c.book_id GROUP BY b.id HAVING n>=1
     ORDER BY avg DESC LIMIT 10`).all();
-  res.json({ hot, cold, readers: masked, reviewTop });
+  res.json({ hot, cold, readers: masked, reviewTop, demo: db.hasDemo });
 });
 
 function maskName(name) {
@@ -531,7 +531,13 @@ app.get('/api/dh', (req, res) => {
   // 5) 作者分布
   const authorTop = db.prepare(`SELECT author, COUNT(*) c FROM books WHERE author IS NOT NULL AND author<>''
     GROUP BY author ORDER BY c DESC LIMIT 15`).all();
-  res.json({ catHeat, trend90, topTags, network: { nodes, links }, authorTop });
+  res.json({ catHeat, trend90, topTags, network: { nodes, links }, authorTop, demo: db.hasDemo });
+});
+
+// ---------- 站点元信息（前端判断演示数据标注） ----------
+app.get('/api/meta', (req, res) => {
+  const totalBooks = db.prepare('SELECT COUNT(*) c FROM books').get().c;
+  res.json({ demo: db.hasDemo, totalBooks, version: '1.0.0' });
 });
 
 // ---------- AI 助手 ----------

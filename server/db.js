@@ -131,7 +131,90 @@ function seed() {
       console.log(`[seed] 已导入 ${books.length} 本真实馆藏（数字人文学院图书室）`);
     }
   }
+
+  // ---------- 演示数据：10 位虚拟读者 + 借阅 + 评论（幂等，供排行榜/分析页展示） ----------
+  seedDemo();
 }
+
+// 幂等：仅当 demo_01 不存在时才写入，避免重复
+function seedDemo() {
+  const exist = db.prepare("SELECT COUNT(*) c FROM users WHERE username='demo_01'").get();
+  if (exist.c > 0) return;
+  const names = ['知行', '拾光', '阅微', '明远', '静好', '清欢', '怀瑾', '书昀', '南风', '见山'];
+  const books = db.prepare('SELECT id FROM books ORDER BY id LIMIT 40').all().map(x => x.id);
+  if (!books.length) return;
+
+  const insertUser = db.prepare(`INSERT INTO users (username,password_hash,salt,role,name,dept,max_borrow) VALUES (?,?,?,?,?,?,?)`);
+  const p = hashPassword('demo123');
+  const uids = names.map((nm, i) => {
+    const info = insertUser.run('demo_' + String(i + 1).padStart(2, '0'), p.hash, p.salt, '读者', '数文读者·' + nm, '数字人文学院', 8);
+    return info.lastInsertRowid;
+  });
+
+  const at = (days) => { const d = new Date(Date.now() + days * 86400000); return d.toISOString().slice(0, 19).replace('T', ' '); };
+  const statuses = ['已还', '借出', '已还', '待取书', '逾期', '已还'];
+  const borrowIns = db.prepare(`INSERT INTO borrows (user_id,book_id,borrow_date,due_date,return_date,status) VALUES (?,?,?,?,?,?)`);
+  const counts = [18, 14, 11, 9, 7, 6, 5, 4, 3, 2]; // 借阅之星差距，覆盖热门/冷门/借阅之星三榜
+
+  const txB = db.transaction(() => {
+    uids.forEach((uid, i) => {
+      const n = counts[i] || 2;
+      for (let k = 0; k < n; k++) {
+        const bid = books[(i * 3 + k * 2) % books.length];
+        const st = statuses[(i + k) % statuses.length];
+        const borrowDaysAgo = 5 + ((i * 7 + k * 3) % 40);
+        const borrow = at(-borrowDaysAgo);
+        const due = at(-borrowDaysAgo + 30);
+        const ret = st === '已还' ? at(-borrowDaysAgo + Math.min(25, borrowDaysAgo - 1)) : null;
+        borrowIns.run(uid, bid, borrow, due, ret, st);
+      }
+    });
+  });
+  txB();
+
+  // 评论（好评榜）：中文读后感 + 正向情感分
+  const reviews = [
+    ['文笔细腻，考据扎实，读来如与先贤对话。', 0.85, '文笔好,有深度'],
+    ['案例丰富，适合入门，框架清晰。', 0.78, '案例丰富,适合入门'],
+    ['装帧素雅，内容厚重，值得反复翻阅。', 0.82, '装帧美,耐读'],
+    ['视角独特，颠覆了我对这段历史的认识。', 0.9, '视角独特,有深度'],
+    ['译笔流畅，思想深刻，强烈推荐。', 0.88, '翻译好,推荐'],
+    ['叙述从容，史料翔实，读完很有收获。', 0.8, '史料翔实,有收获'],
+    ['图文并茂，把抽象理论讲得通俗。', 0.75, '通俗易懂,图文并茂'],
+    ['语言诗意，哲思绵长，余味悠长。', 0.84, '诗意,哲思'],
+    ['结构严谨，论证有力，学术价值高。', 0.86, '结构严谨,学术'],
+    ['把小人物写活了，烟火气十足。', 0.79, '人物鲜活,烟火气'],
+    ['注释详尽，便于深读，做研究很方便。', 0.77, '注释全,研究友好'],
+    ['节奏明快，一口气读完不觉得累。', 0.72, '节奏好,易读'],
+    ['思想锐利，敢于直面真问题。', 0.83, '思想锐利,敢言'],
+    ['田野调查扎实，细节动人。', 0.81, '田野扎实,细节'],
+    ['跨学科视野，给人很多启发。', 0.87, '跨学科,启发'],
+    ['语言干净，情感克制而深沉。', 0.76, '语言干净,深沉'],
+    ['把复杂问题讲简单了，难得。', 0.74, '化繁为简,清晰'],
+    ['史料与叙事平衡得很好。', 0.8, '史料,叙事'],
+    ['封面设计有巧思，内容也对得起颜值。', 0.78, '设计巧思,物有所值'],
+    ['读完对专业理解更深了一层。', 0.85, '增益,专业'],
+    ['批判性强，不人云亦云。', 0.82, '批判性,独立'],
+    ['温柔又有力量，适合静夜读。', 0.73, '温柔,力量'],
+    ['方法论清晰，可操作性强。', 0.79, '方法论,实用'],
+    ['引文广博，足见功底。', 0.77, '引文广博,功底'],
+    ['把地方文化写得活色生香。', 0.84, '地方文化,鲜活']
+  ];
+  const insC = db.prepare(`INSERT INTO comments (book_id,user_id,user_name,content,sentiment,tags,created_at) VALUES (?,?,?,?,?,?,?)`);
+  const txC = db.transaction(() => {
+    reviews.forEach((c, i) => {
+      const bid = books[(i * 5 + 3) % books.length];
+      const uid = uids[i % uids.length];
+      insC.run(bid, uid, '数文读者·' + names[i % names.length], c[0], c[1], c[2], at(-i));
+    });
+  });
+  txC();
+  console.log('[seed] 已创建 10 位虚拟读者及演示借阅/评论数据');
+}
+
+const hasDemo = db.prepare("SELECT COUNT(*) c FROM users WHERE username='demo_01'").get().c > 0;
+db.hasDemo = hasDemo;
+
 seed();
 
 module.exports = db;
