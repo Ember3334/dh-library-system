@@ -9,7 +9,7 @@ import xml.etree.ElementTree as ET
 from collections import Counter
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-XLSX = os.path.join(ROOT, '图书馆', '新建文件夹', '馆藏图书信息.xlsx')
+XLSX = os.path.join(ROOT, 'references', 'source-data', '馆藏数据', '馆藏图书信息.xlsx')
 OUT = os.path.join(ROOT, 'data', 'seed-books.json')
 NS = '{http://schemas.openxmlformats.org/spreadsheetml/2006/main}'
 

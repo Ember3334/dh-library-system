@@ -4,7 +4,14 @@ const fs = require('fs');
 const express = require('express');
 const cors = require('cors');
 const db = require('./db');
-const { router: authRouter, requireAuth, requireRole, publicUser } = require('./auth');
+const { router: authRouter, requireAuth, requireRole, publicUser, getUserFromReq } = require('./auth');
+
+// 可选鉴权：带 token 就认用户，不带也能用（访客模式）
+function optionalAuth(req, res, next) {
+  const u = getUserFromReq(req);
+  if (u) req.user = u;
+  next();
+}
 const ai = require('./ai');
 
 const app = express();
@@ -540,31 +547,40 @@ app.get('/api/meta', (req, res) => {
   res.json({ demo: db.hasDemo, totalBooks, version: '1.0.0' });
 });
 
-// ---------- AI 助手 ----------
-app.post('/api/ai/ask', requireAuth, async (req, res) => {
+// ---------- AI 馆员智能体 ----------
+// 支持访客：带 token 时给出个性化结果（我的借阅 / 偏好推荐），不带 token 也能检索荐书
+app.post('/api/ai/ask', optionalAuth, async (req, res) => {
   const q = (req.body?.question || '').toString().trim();
   try {
-    const result = await ai.answer(q, { uid: req.user.uid });
+    const result = await ai.answer(q, { uid: req.user ? req.user.uid : null });
     res.json(result);
   } catch (e) {
     res.status(500).json({ error: 'AI 服务异常：' + e.message });
   }
 });
-// AI 在线/离线状态（混合模式：配置 LLM_API_URL + LLM_API_KEY 即在线）
-app.get('/api/ai/status', (req, res) => {
-  const online = !!(process.env.LLM_API_URL && process.env.LLM_API_KEY);
-  res.json({ online, mode: online ? 'llm' : 'rule' });
+// 模式与能力清单（混合模式：配置 LLM_API_URL + LLM_API_KEY 即升级为工具增强大模型）
+app.get('/api/ai/status', (req, res) => { res.json(ai.status()); });
+// 清空当前会话记忆
+app.post('/api/ai/reset', optionalAuth, (req, res) => {
+  ai.resetSession(req.user ? req.user.uid : null);
+  res.json({ ok: true });
 });
-// AI 导读（单本书，RAG + 离线模板）
-app.get('/api/ai/digest/:id', requireAuth, async (req, res) => {
+// AI 导读（单本书，RAG + 真实馆藏/书评数据）
+app.get('/api/ai/digest/:id', optionalAuth, async (req, res) => {
   const book = db.prepare('SELECT * FROM books WHERE id=?').get(req.params.id);
   if (!book) return res.status(404).json({ error: '未找到该书' });
   try {
-    const result = await ai.digest(book, { uid: req.user.uid });
+    const result = await ai.digest(book, { uid: req.user ? req.user.uid : null });
     res.json(result);
   } catch (e) {
     res.status(500).json({ error: '导读生成失败：' + e.message });
   }
+});
+// AI 智能检索（供前端直接调用工具，返回结构化书目）
+app.get('/api/ai/search', optionalAuth, (req, res) => {
+  const q = (req.query.q || '').toString();
+  const limit = Math.min(20, Math.max(1, parseInt(req.query.limit, 10) || 8));
+  res.json({ books: ai.searchBooks(q, { limit }) });
 });
 
 // ---------- 图书：封面上传（馆员+） ----------
@@ -595,7 +611,12 @@ app.post('/api/books/:id/cover', requireRole('馆员', '管理员'), (req, res) 
 });
 
 // ---------- 静态资源（SPA） ----------
-app.use(express.static(path.join(__dirname, '../public')));
+// 前端资源禁用缓存：改完 JS/CSS 刷新即生效，无需手动清缓存
+app.use(express.static(path.join(__dirname, '../public'), {
+  setHeaders(res, filePath) {
+    if (/\.(js|css|html)$/i.test(filePath)) res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+  }
+}));
 // 封面走 /covers/<索书号>.jpg：文件缺失时返回 404，前端自动回退占位图（不落入 SPA 兜底）
 app.get(/^(?!\/api\/|\/covers\/).*/, (req, res) => {
   res.sendFile(path.join(__dirname, '../public', 'index.html'));

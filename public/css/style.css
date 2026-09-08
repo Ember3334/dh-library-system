@@ -4,6 +4,10 @@
   --accent:#c2693b; --accent2:#cf7d3a; --ai:#e0892b; --cyan:#2f8f83;
   --green:#5e9e5e; --red:#c5524a; --amber:#cf9a2b;
   --radius:16px; --shadow:0 10px 40px rgba(120,80,40,.18);
+  /* 知识星空 · 夜空底色（浅色主题 = 晨昏薄暮蓝） */
+  --sky-1:#3f5f96; --sky-2:#213a63; --sky-3:#0f1729;
+  --sky-glow:rgba(150,180,240,.20); --sky-vignette:rgba(4,8,18,.55);
+  --sky-panel:rgba(12,18,32,.55); --sky-ink:#e8eefc;
 }
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%}
@@ -93,13 +97,29 @@ button{font-family:inherit;cursor:pointer;border:none}
 .chip.active{color:#2a1d10;background:linear-gradient(135deg,var(--ai),var(--accent));border-color:transparent;font-weight:700}
 
 /* 知识星空 */
-.star-wrap{position:relative;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow);min-height:420px}
-.star-canvas{display:block;width:100%;height:100%}
+/* 关键：stage 为固定高度容器，canvas 绝对定位铺满。
+   否则 canvas 高度撑高父容器 → ResizeObserver 再次放大 → 无限拉长 */
+.star-wrap{position:relative;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow)}
+.star-stage{position:relative;width:100%;height:var(--star-h,520px);overflow:hidden;background:radial-gradient(125% 120% at 50% 46%,transparent 48%,var(--sky-vignette) 100%),radial-gradient(130% 95% at 28% 16%,var(--sky-2),transparent 58%),linear-gradient(158deg,var(--sky-1),var(--sky-2) 44%,var(--sky-3))}
+.star-canvas{position:absolute;inset:0;display:block;width:100%;height:100%}
 .star-wrap.loading .star-canvas{opacity:.6}
-.star-legend{position:absolute;left:14px;bottom:12px;display:flex;gap:16px;align-items:center;font-size:12px;color:var(--muted);background:rgba(255,250,242,.8);padding:6px 12px;border-radius:999px;border:1px solid var(--line)}
+/* 悬停信息浮层（DOM 渲染，比 canvas 文字清晰且不吃性能） */
+.star-tip{position:absolute;z-index:5;pointer-events:none;opacity:0;transform:translate(-50%,-100%) translateY(-12px);transition:opacity .15s,transform .15s;
+  background:var(--sky-panel);color:var(--sky-ink);border:1px solid rgba(180,200,255,.28);border-radius:10px;padding:8px 12px;max-width:260px;
+  backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px);box-shadow:0 10px 30px rgba(0,0,0,.45);font-size:12px;line-height:1.5}
+.star-tip.on{opacity:1}
+.star-tip b{display:block;font-size:13px;margin-bottom:2px;color:#ffd9a3}
+.star-tip .m{color:#cfe0ff}
+.star-tip .s{margin-top:3px;color:#8fd6a0}
+.star-tip .s.no{color:#e79a8a}
+.star-sample{position:absolute;right:14px;top:14px;z-index:4;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--sky-ink);
+  background:var(--sky-panel);border:1px solid rgba(180,200,255,.22);border-radius:999px;padding:5px 6px 5px 12px;backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px)}
+.star-sample button{font-size:12px;padding:3px 10px;border-radius:999px;border:1px solid rgba(180,200,255,.22);background:rgba(20,30,54,.6);color:var(--sky-ink);cursor:pointer;transition:.2s}
+.star-sample button:hover{border-color:var(--ai);color:#ffd9a3}
+.star-legend{position:absolute;left:14px;bottom:12px;display:flex;gap:16px;align-items:center;font-size:12px;color:var(--sky-ink);background:var(--sky-panel);padding:6px 12px;border-radius:999px;border:1px solid rgba(180,200,255,.22);backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px)}
 .star-legend .dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:5px}
 .star-legend .dot.lit{background:var(--ai);box-shadow:0 0 8px var(--ai)}
-.star-legend .dot.dim{background:var(--dim);opacity:.5}
+.star-legend .dot.dim{background:#9fb4d8;opacity:.6}
 .star-loader{position:absolute;top:18px;right:18px;display:none;gap:6px;align-items:center;z-index:3}
 .star-wrap.loading .star-loader{display:flex}
 .star-loader span{width:8px;height:8px;border-radius:50%;background:var(--accent);animation:dots 1s infinite both}
@@ -215,14 +235,32 @@ canvas{width:100%!important;display:block}
 #ai-panel{position:fixed;right:24px;bottom:24px;z-index:91;width:min(380px,92vw);height:min(560px,80vh);background:var(--card-solid);border:1px solid var(--line);border-radius:18px;display:flex;flex-direction:column;box-shadow:var(--shadow);overflow:hidden;animation:rise .25s both}
 #ai-head{display:flex;justify-content:space-between;align-items:center;padding:14px 16px;border-bottom:1px solid var(--line);background:linear-gradient(135deg,rgba(224,137,43,.22),rgba(194,106,59,.2))}
 #ai-head button{background:none;color:var(--txt);font-size:22px;line-height:1}
+.ai-head-actions{display:flex;align-items:center;gap:4px}
+.ai-head-actions #ai-reset{font-size:15px;opacity:.7;padding:2px 5px;border-radius:8px;transition:.2s}
+.ai-head-actions #ai-reset:hover{opacity:1;background:rgba(194,106,59,.2)}
 #ai-log{flex:1;overflow:auto;padding:14px;display:flex;flex-direction:column;gap:10px}
-.msg{max-width:85%;padding:9px 13px;border-radius:14px;font-size:14px;white-space:pre-wrap;line-height:1.55}
+.msg{max-width:88%;padding:9px 13px;border-radius:14px;font-size:14px;white-space:pre-wrap;line-height:1.55}
 .msg.ai{align-self:flex-start;background:rgba(194,106,59,.14);border:1px solid var(--line);border-bottom-left-radius:4px}
 .msg.me{align-self:flex-end;background:linear-gradient(135deg,var(--accent),var(--accent2));color:#fff;border-bottom-right-radius:4px}
+.msg b{font-weight:800}
+/* 意图徽标 */
+.ai-intent{display:inline-block;margin-left:6px;padding:1px 7px;border-radius:999px;font-size:11px;color:var(--muted);
+  background:rgba(194,106,59,.14);border:1px solid var(--line);vertical-align:2px}
 .msg .books{display:flex;flex-direction:column;gap:6px;margin-top:8px}
-.msg .books .b{display:flex;gap:8px;align-items:center;background:rgba(59,47,35,.35);border:1px solid var(--line);border-radius:10px;padding:6px 8px;cursor:pointer}
-.msg .books .b .c{width:30px;height:42px;border-radius:6px;flex:none;display:grid;place-items:center;font-weight:800;color:#fff;font-size:13px}
-.msg .books .b small{color:var(--muted)}
+.msg .books .b{display:flex;gap:8px;align-items:center;background:rgba(59,47,35,.35);border:1px solid var(--line);border-radius:10px;padding:6px 8px;cursor:pointer;transition:.18s}
+.msg .books .b:hover{border-color:var(--accent);transform:translateX(2px)}
+.msg .books .b .c{width:30px;height:42px;border-radius:6px;flex:none;object-fit:cover;display:grid;place-items:center;font-weight:800;color:#fff;font-size:13px}
+.msg .books .b .bi{min-width:0;flex:1}
+.msg .books .b .bt{font-size:13px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.msg .books .b small{color:var(--muted);font-size:11px;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.msg .books .b .st{flex:none;font-size:11px;padding:2px 7px;border-radius:999px}
+.msg .books .b .st.ok{background:rgba(94,158,94,.18);color:var(--green)}
+.msg .books .b .st.no{background:rgba(197,82,74,.16);color:var(--red)}
+/* 快捷追问 */
+.ai-chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.ai-chip{font-size:12px;padding:4px 10px;border-radius:999px;border:1px solid var(--line);background:var(--card-solid);
+  color:var(--txt);cursor:pointer;transition:.18s;white-space:nowrap}
+.ai-chip:hover{border-color:var(--accent);color:var(--accent);background:rgba(224,137,43,.1)}
 #ai-input-row{display:flex;gap:8px;padding:12px;border-top:1px solid var(--line)}
 #ai-input-row input{flex:1;padding:10px 12px;border-radius:10px;border:1px solid var(--line);background:var(--card-solid);color:var(--txt);outline:none}
 #ai-input-row button{padding:10px 16px;border-radius:10px;font-weight:700;color:#2a1d10;background:linear-gradient(135deg,var(--ai),var(--accent))}
@@ -247,6 +285,10 @@ body,#topbar,.card,.kpi,.book-card,.btn,.nav-ai,.nav-theme,.chip,.tab,.borrow-it
   --accent:#e0892b; --accent2:#cf7d3a; --ai:#f0a23c; --cyan:#4bb3a3;
   --green:#7cc47c; --red:#e0786f; --amber:#e6b24b;
   --shadow:0 10px 40px rgba(0,0,0,.5);
+  /* 知识星空 · 夜空底色（深色主题 = 深夜） */
+  --sky-1:#1a2746; --sky-2:#0e1730; --sky-3:#05070f;
+  --sky-glow:rgba(120,150,230,.16); --sky-vignette:rgba(2,4,12,.62);
+  --sky-panel:rgba(8,12,24,.6); --sky-ink:#eaf0ff;
 }
 [data-theme="dark"] #bg-grid{
   background:
@@ -367,5 +409,7 @@ body,#topbar,.card,.kpi,.book-card,.btn,.nav-ai,.nav-theme,.chip,.tab,.borrow-it
   .detail .cover{height:260px}
   .search-row input{min-width:100%}
   .comment-form{flex-direction:column}
-  .star-wrap{min-height:320px}
+  .star-stage{height:380px;--star-h:380px}
+  .star-legend{gap:10px;font-size:11px;left:10px;bottom:8px}
+  .star-sample{right:10px;top:10px;font-size:11px}
 }

@@ -110,6 +110,8 @@ const API = {
   updateReader(id, b) { return this.req('PUT', '/api/admin/readers/' + id, b); },
   ask(q) { return this.req('POST', '/api/ai/ask', { question: q }); },
   aiStatus() { return this.req('GET', '/api/ai/status'); },
+  aiReset() { return this.req('POST', '/api/ai/reset', {}); },
+  aiSearch(q, limit) { return this.req('GET', '/api/ai/search?q=' + encodeURIComponent(q) + '&limit=' + (limit || 8)); },
   digest(id) { return this.req('GET', '/api/ai/digest/' + id); },
   overview() { return this.req('GET', '/api/overview'); },
   activity(n) { return this.req('GET', '/api/activity' + (n ? ('?limit=' + n) : '')); },
@@ -202,6 +204,7 @@ function applyTheme() { const t = localStorage.getItem('dh_theme') || 'light'; d
 function toggleTheme() {
   const cur = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
   document.documentElement.dataset.theme = cur; localStorage.setItem('dh_theme', cur); updateThemeBtn();
+  window.dispatchEvent(new CustomEvent('dh:theme', { detail: { theme: cur } }));
 }
 function updateThemeBtn() {
   const b = document.getElementById('theme-btn');

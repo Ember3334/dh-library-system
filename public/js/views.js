@@ -5,146 +5,352 @@ const Views = (() => {
   const app = () => $('#app');
 
   // ---------- 知识星空 Canvas 渲染器 ----------
+  // 设计要点：
+  // 1) 画布绝对定位于固定高度的 .star-stage，杜绝「canvas 撑高父容器 → 无限拉长」
+  // 2) 采样上限 MAX 颗，避免 696 本一次性渲染卡死
+  // 3) 按分类聚成「星系」，黄金角螺旋排布，视觉上像星座而不是一锅粥
+  // 4) 排斥/连线/命中检测全部走网格，连线预计算，逐帧只做 drawImage（精灵图）
+  const STAR_PALETTE = { '文学类': '#e88b2c', '艺术类': '#e070a0', '历史': '#3aa0a2', '思政综合类': '#b8892e', default: '#a87c45' };
+  const STAR_MAX = 320;
+
+  function makeStarSprite(color) {
+    const S = 64, c = document.createElement('canvas');
+    c.width = c.height = S;
+    const g = c.getContext('2d');
+    const grd = g.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+    grd.addColorStop(0, color); grd.addColorStop(0.22, color);
+    grd.addColorStop(0.45, hexA(color, 0.28)); grd.addColorStop(1, hexA(color, 0));
+    g.fillStyle = grd; g.beginPath(); g.arc(S / 2, S / 2, S / 2, 0, Math.PI * 2); g.fill();
+    // 星核：向白色混合 55%（纯白核在浅色卡片背景上反而看不见）
+    const n = parseInt(color.slice(1), 16);
+    const mix = c2 => Math.round(c2 + (255 - c2) * 0.55);
+    g.fillStyle = `rgb(${mix((n >> 16) & 255)},${mix((n >> 8) & 255)},${mix(n & 255)})`;
+    g.beginPath(); g.arc(S / 2, S / 2, 7.5, 0, Math.PI * 2); g.fill();
+    return c;
+  }
+  function hexA(hex, a) {
+    const n = parseInt(hex.slice(1), 16);
+    return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+  }
+
   class StarScene {
-    constructor(canvas, books) {
+    constructor(canvas, books, opts) {
+      opts = opts || {};
       this.canvas = canvas;
-      this.books = books;
-      this.stars = [];
+      this.stage = canvas.parentElement;
+      this.all = books || [];
+      this.maxCap = opts.max || STAR_MAX;
+      this.max = this.maxCap;
+      this.seed = 0;
+      this.nodes = [];
+      this.links = [];
+      this.micro = [];
       this.hoverId = null;
+      this.encounterId = null;
       this.raf = null;
       this.dpr = Math.min(window.devicePixelRatio || 1, 2);
-      this.encounterId = null;
+      this.t0 = performance.now();
+      this.reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      // 视差：鼠标驱动的目标位置 + 平滑跟随
+      this.px = 0; this.py = 0; this.tgx = 0; this.tgy = 0;
+      this.sprites = {};
+      Object.keys(STAR_PALETTE).forEach(k => { this.sprites[k] = makeStarSprite(STAR_PALETTE[k]); });
+      this.tip = document.createElement('div');
+      this.tip.className = 'star-tip';
+      this.stage.appendChild(this.tip);
+      this.applySky();
       this.resize();
-      this.build();
+      this.buildMicro();
+      this.rebuild();
       this.bind();
       this.loop();
-      this._ro = new ResizeObserver(() => { this.resize(); this.build(); });
-      this._ro.observe(canvas.parentElement);
+      this._ro = new ResizeObserver(() => {
+        const w = this.w, h = this.h;
+        this.resize();
+        if (Math.abs(this.w - w) > 2 || Math.abs(this.h - h) > 2) { this.buildMicro(); this.rebuild(); }
+      });
+      this._ro.observe(this.stage);
+      this._onTheme = () => this.applySky();
+      window.addEventListener('dh:theme', this._onTheme);
     }
     resize() {
-      const rect = this.canvas.parentElement.getBoundingClientRect();
-      this.w = rect.width; this.h = Math.max(360, rect.height);
-      this.canvas.width = this.w * this.dpr; this.canvas.height = this.h * this.dpr;
-      this.canvas.style.width = this.w + 'px'; this.canvas.style.height = this.h + 'px';
-      const ctx = this.canvas.getContext('2d'); ctx.scale(this.dpr, this.dpr);
+      const r = this.stage.getBoundingClientRect();
+      this.w = Math.max(320, r.width);
+      this.h = Math.max(300, r.height);
+      this.canvas.width = Math.round(this.w * this.dpr);
+      this.canvas.height = Math.round(this.h * this.dpr);
+      const ctx = this.canvas.getContext('2d');
+      ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0);
+      // 星数随画布面积自适应：小屏（手机）自动降密度，避免糊成一团
+      const byArea = Math.round(this.w * this.h / 1500);
+      this.max = Math.max(80, Math.min(this.maxCap, byArea));
     }
-    build() {
-      const palette = { '文学类': '#e88b2c', '艺术类': '#e070a0', '历史': '#3aa0a2', '思政综合类': '#b8892e', default: '#a87c45' };
-      // 环境星兜底：无书籍数据时，生成纯装饰星点，canvas 永不空白
-      if (!this.books || !this.books.length) {
-        this.stars = Array.from({ length: 64 }, (_, k) => ({
-          id: 'amb' + k, book: null,
-          x: 0.04 + Math.random() * 0.92, y: 0.06 + Math.random() * 0.86,
-          base: 0.5 + Math.random() * 1.1, phase: Math.random() * Math.PI * 2, speed: 0.4 + Math.random() * 1.2,
-          color: palette.default, ring: 0, pulse: 0, scale: 1, targetScale: 1
-        }));
-        return;
+    // 主题色（仅影响连线等叠加层的对比度，天空底由 CSS 负责）
+    applySky() {
+      const dark = document.documentElement.dataset.theme === 'dark';
+      this.skyLine = dark ? 'rgba(170,195,255,.16)' : 'rgba(255,222,196,.16)';
+      this.microTint = dark ? '#dfe8ff' : '#eaf1ff';
+    }
+    // 远景微星层（3 层离屏 canvas，逐帧各 1 次 drawImage，靠不同 alpha 频率错开明灭）
+    buildMicro() {
+      const cfg = [
+        { count: 92, depth: 0.20, base: 0.45, size: 0.8, freq: 0.55 },
+        { count: 64, depth: 0.42, base: 0.65, size: 1.05, freq: 1.05 },
+        { count: 40, depth: 0.68, base: 0.9, size: 1.35, freq: 1.7 },
+      ];
+      const w = Math.max(1, Math.round(this.w)), h = Math.max(1, Math.round(this.h));
+      this.micro = cfg.map(c => {
+        const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+        const x = cv.getContext('2d');
+        for (let i = 0; i < c.count; i++) {
+          const px = Math.random() * w, py = Math.random() * h;
+          const r = c.size * (0.55 + Math.random() * 0.85);
+          x.globalAlpha = c.base * (0.35 + Math.random() * 0.65);
+          x.fillStyle = Math.random() < 0.14 ? '#bcd2ff' : this.microTint;
+          x.beginPath(); x.arc(px, py, r, 0, Math.PI * 2); x.fill();
+        }
+        return { canvas: cv, depth: c.depth, freq: c.freq, base: c.base };
+      });
+    }
+    rebuild() { this.sample(); this.layout(); this.links = this.buildLinks(); this.grid = this.buildGrid(56); }
+    // 采样：总数超上限时随机抽一批（同批稳定，可「换一批」）
+    sample() {
+      const all = this.all;
+      if (all.length <= this.max) { this.picked = all.slice(); return; }
+      const arr = all.slice();
+      let s = (this.seed * 9301 + 49297) % 233280;
+      const rnd = () => { s = (s * 9301 + 49297) % 233280; return s / 233280; };
+      for (let i = arr.length - 1; i > 0; i--) { const j = Math.floor(rnd() * (i + 1)); const t = arr[i]; arr[i] = arr[j]; arr[j] = t; }
+      this.picked = arr.slice(0, this.max);
+    }
+    reseed() { this.seed++; this.t0 = performance.now(); this.rebuild(); }
+    // 布局：数量最多的分类做中央球状星团（核心），其余分类作卫星簇绕环分布
+    layout() {
+      const pad = 30;
+      const W = this.w - pad * 2, H = this.h - pad * 2;
+      const list = this.picked;
+      if (!list.length) {
+        this.nodes = Array.from({ length: 70 }, (_, k) => this.makeNode(null, pad + Math.random() * W, pad + Math.random() * H, k));
+        this.relax(10); return;
       }
-      this.stars = this.books.map((b, i) => ({
-        id: b.id, book: b,
-        x: 0.06 + Math.random() * 0.88, y: 0.10 + Math.random() * 0.76,
-        base: 0.9 + Math.random() * 1.8, phase: Math.random() * Math.PI * 2, speed: 0.5 + Math.random() * 1.5,
-        color: palette[b.category] || palette.default,
-        ring: 0, pulse: 0, scale: 0, targetScale: 1
-      }));
-      // 避免重叠：简单排斥迭代
-      for (let k = 0; k < 36; k++) {
-        for (let i = 0; i < this.stars.length; i++) {
-          for (let j = i + 1; j < this.stars.length; j++) {
-            const a = this.stars[i], c = this.stars[j];
-            const dx = (a.x - c.x) * this.w, dy = (a.y - c.y) * this.h;
-            const d = Math.hypot(dx, dy);
-            const min = 52;
-            if (d < min && d > 0) {
-              const ux = dx / d, uy = dy / d; const f = (min - d) * 0.035 / this.w;
-              a.x = Math.max(0.04, Math.min(0.96, a.x + ux * f)); a.y = Math.max(0.08, Math.min(0.92, a.y + uy * f));
-              c.x = Math.max(0.04, Math.min(0.96, c.x - ux * f)); c.y = Math.max(0.08, Math.min(0.92, c.y - uy * f));
+      const groups = new Map();
+      list.forEach(b => { const k = b.category || '其他'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(b); });
+      const sorted = [...groups.entries()].sort((a, b) => b[1].length - a[1].length);
+      const cx0 = pad + W / 2, cy0 = pad + H / 2;
+      const minSide = Math.min(W, H);
+      this.nodes = [];
+      // 核心（最大分类）：向心高聚集的球状星团
+      const [coreKey, coreArr] = sorted[0];
+      const Rcore = minSide * 0.30;
+      coreArr.forEach((b, j) => {
+        const t = (j + 0.5) / coreArr.length;
+        const rr = Rcore * Math.sqrt(t) * (0.82 + Math.random() * 0.26);
+        const a = Math.random() * Math.PI * 2;
+        const x = cx0 + Math.cos(a) * rr, y = cy0 + Math.sin(a) * rr * 0.96;
+        this.nodes.push(this.makeNode(b, x, y, this.nodes.length, coreKey));
+      });
+      // 卫星簇（其余分类）：绕环分布，椭圆拉伸避免与圆核重叠
+      const sats = sorted.slice(1);
+      const Rring = minSide * 0.42;
+      sats.forEach(([key, arr], si) => {
+        const ang = -Math.PI / 2 + si * (Math.PI * 2 / sats.length);
+        const ccx = cx0 + Math.cos(ang) * Rring * (W / Math.max(W, H)) * 1.25;
+        const ccy = cy0 + Math.sin(ang) * Rring;
+        const Rc = Math.max(34, Math.min(minSide * 0.26, minSide * 0.16 * Math.sqrt(arr.length) + 18));
+        arr.forEach((b, j) => {
+          const t = (j + 0.6) / arr.length;
+          const rr = Rc * Math.sqrt(t) * (0.9 + Math.random() * 0.14);
+          const a = j * 2.399963229728653 + si * 1.7 + Math.random() * 0.3;
+          let x = ccx + Math.cos(a) * rr * 1.18, y = ccy + Math.sin(a) * rr * 0.92;
+          x = Math.min(pad + W - 4, Math.max(pad + 4, x));
+          y = Math.min(pad + H - 4, Math.max(pad + 4, y));
+          this.nodes.push(this.makeNode(b, x, y, this.nodes.length, key));
+        });
+      });
+      this.relax(24);
+    }
+    makeNode(book, x, y, i, group) {
+      // 星等幂律：多数暗星 + 少数亮星（真实星空分布）
+      const m = Math.pow(Math.random(), 2.2);
+      return {
+        id: book ? book.id : 'amb' + i, book: book, group: group || null,
+        x: x, y: y,
+        r: (book ? 1.7 : 1.1) + m * (book ? 3.3 : 1.4),
+        mag: m,
+        phase: Math.random() * Math.PI * 2,
+        speed: 0.5 + Math.random() * 1.4,
+        phase2: Math.random() * Math.PI * 2,
+        colorKey: (book && STAR_PALETTE[book.category]) ? book.category : 'default',
+        delay: (i % 120) * 5.5 + Math.random() * 220,
+        pulse: 0
+      };
+    }
+    // 网格加速的排斥迭代
+    relax(iters) {
+      const cell = 30, minD = 24;
+      for (let it = 0; it < iters; it++) {
+        const g = new Map();
+        const key = (cx, cy) => cx + ',' + cy;
+        this.nodes.forEach((n, i) => { const k = key(Math.floor(n.x / cell), Math.floor(n.y / cell)); if (!g.has(k)) g.set(k, []); g.get(k).push(i); });
+        for (let i = 0; i < this.nodes.length; i++) {
+          const a = this.nodes[i];
+          const cx = Math.floor(a.x / cell), cy = Math.floor(a.y / cell);
+          for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) {
+            const bucket = g.get(key(cx + ox, cy + oy)); if (!bucket) continue;
+            for (const j of bucket) {
+              if (j <= i) continue;
+              const b = this.nodes[j];
+              let dx = b.x - a.x, dy = b.y - a.y;
+              let d = Math.hypot(dx, dy);
+              if (d >= minD) continue;
+              if (d < 0.001) { dx = (Math.random() - 0.5); dy = (Math.random() - 0.5); d = Math.hypot(dx, dy) || 1; }
+              const push = (minD - d) * 0.34;
+              const ux = dx / d * push, uy = dy / d * push;
+              a.x -= ux; a.y -= uy; b.x += ux; b.y += uy;
             }
           }
         }
+        const pad = 8;
+        this.nodes.forEach(n => {
+          n.x = Math.min(this.w - pad, Math.max(pad, n.x));
+          n.y = Math.min(this.h - pad, Math.max(pad, n.y));
+        });
       }
-      // 入场动画：依次放大
-      this.stars.forEach((s, i) => { setTimeout(() => { s.targetScale = 1; }, i * 12 + 60); });
+    }
+    // 连线预计算：稀疏星座骨架（每簇按 y 排序链状连接，总数封顶 ~52），避免逐帧 O(n²)
+    buildLinks() {
+      const byGroup = new Map();
+      this.nodes.forEach((n, i) => { const k = n.group || 'amb'; if (!byGroup.has(k)) byGroup.set(k, []); byGroup.get(k).push(i); });
+      const out = []; const capTotal = 52;
+      byGroup.forEach(list => {
+        if (list.length < 2) return;
+        const sorted = list.slice().sort((a, b) => this.nodes[a].y - this.nodes[b].y);
+        const per = Math.min(list.length - 1, Math.max(3, Math.round(list.length * 0.12)));
+        for (let i = 0; i < per && out.length < capTotal; i++) out.push([sorted[i], sorted[i + 1]]);
+      });
+      return out;
+    }
+    buildGrid(cell) {
+      const g = new Map();
+      this.nodes.forEach((n, i) => { const k = Math.floor(n.x / cell) + ',' + Math.floor(n.y / cell); if (!g.has(k)) g.set(k, []); g.get(k).push(i); });
+      return { cell, map: g };
+    }
+    pick(mx, my) {
+      const { cell, map } = this.grid;
+      // 鼠标坐标要反算视差：星在屏幕上位于 n.x + this.px，故用 mx - this.px 还原基础坐标
+      mx -= this.px; my -= this.py;
+      let best = null, bd = Infinity;
+      for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) {
+        const b = map.get((Math.floor(mx / cell) + ox) + ',' + (Math.floor(my / cell) + oy)); if (!b) continue;
+        for (const i of b) {
+          const n = this.nodes[i];
+          const d = Math.hypot(n.x - mx, n.y - my);
+          const hitR = Math.max(9, n.r * 2.2);
+          if (d < hitR && d < bd) { bd = d; best = n; }
+        }
+      }
+      return best;
     }
     bind() {
-      this.canvas.addEventListener('mousemove', e => {
+      const onMove = e => {
         const rect = this.canvas.getBoundingClientRect();
-        const mx = (e.clientX - rect.left) / this.w, my = (e.clientY - rect.top) / this.h;
-        let hit = null, best = Infinity;
-        this.stars.forEach(s => {
-          const r = 5 + s.base * 3;
-          const d = Math.hypot((s.x - mx) * this.w, (s.y - my) * this.h);
-          if (s.book && d < r + 8 && d < best) { best = d; hit = s.id; }
-        });
-        this.hoverId = hit;
-        this.canvas.style.cursor = hit ? 'pointer' : 'default';
-      });
+        const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+        if (!this.reduced) {
+          this.tgx = ((mx - this.w / 2) / (this.w / 2)) * 22;
+          this.tgy = ((my - this.h / 2) / (this.h / 2)) * 22;
+        }
+        const n = this.pick(mx, my);
+        if (!n || !n.book) { this.setHover(null); return; }
+        this.setHover(n);
+      };
+      this.canvas.addEventListener('mousemove', onMove);
+      this.canvas.addEventListener('mouseleave', () => { this.tgx = 0; this.tgy = 0; this.setHover(null); });
       this.canvas.addEventListener('click', e => {
-        const s = this.stars.find(x => x.id === this.hoverId);
-        if (s && s.book) location.hash = '#/book/' + s.id;
+        const rect = this.canvas.getBoundingClientRect();
+        const n = this.pick(e.clientX - rect.left, e.clientY - rect.top);
+        if (n && n.book) location.hash = '#/book/' + n.id;
       });
     }
+    setHover(n) {
+      if (!n) { this.hoverId = null; this.tip.classList.remove('on'); this.canvas.style.cursor = 'default'; return; }
+      if (this.hoverId === n.id) return;
+      this.hoverId = n.id;
+      this.canvas.style.cursor = 'pointer';
+      const b = n.book;
+      const ok = b.available > 0;
+      this.tip.innerHTML = `<b>${esc(b.title)}</b><div class="m">${esc(b.author || '未知')} · ${esc(b.category || '')}</div>` +
+        `<div class="s ${ok ? '' : 'no'}">${ok ? '可借 ' + b.available + ' / ' + b.total : '已借出完'}</div>`;
+      // 浮层跟随视差后的屏幕坐标
+      const sx = n.x + this.px, sy = n.y + this.py;
+      this.tip.style.left = Math.min(this.w - 100, Math.max(100, sx)) + 'px';
+      const flip = sy < 92;
+      this.tip.style.transform = flip ? 'translate(-50%,0) translateY(14px)' : 'translate(-50%,-100%) translateY(-14px)';
+      this.tip.style.top = (flip ? sy + n.r * 2 + 6 : sy - n.r * 2 - 6) + 'px';
+      this.tip.classList.add('on');
+    }
     encounter() {
-      if (!this.stars.length) return;
-      const idx = Math.floor(Math.random() * this.stars.length);
-      const s = this.stars[idx];
-      this.encounterId = s.id;
-      s.pulse = 1;
+      const live = this.nodes.filter(n => n.book);
+      if (!live.length) return;
+      const s = live[Math.floor(Math.random() * live.length)];
+      this.encounterId = s.id; s.pulse = 1;
       setTimeout(() => { location.hash = '#/book/' + s.id; this.encounterId = null; s.pulse = 0; }, 900);
     }
     loop() {
       const ctx = this.canvas.getContext('2d');
-      const t = performance.now() / 1000;
+      const now = performance.now();
+      const t = now / 1000;
+      // 视差平滑跟随
+      if (!this.reduced) { this.px += (this.tgx - this.px) * 0.08; this.py += (this.tgy - this.py) * 0.08; }
+      else { this.px = 0; this.py = 0; }
       ctx.clearRect(0, 0, this.w, this.h);
-      // 背景星云
-      const grad = ctx.createRadialGradient(this.w * 0.5, this.h * 0.4, 0, this.w * 0.5, this.h * 0.5, this.w * 0.8);
-      grad.addColorStop(0, 'rgba(224,137,43,.06)'); grad.addColorStop(1, 'rgba(224,137,43,0)');
-      ctx.fillStyle = grad; ctx.fillRect(0, 0, this.w, this.h);
-      // 星座连线（邻近星微弱连接）
-      ctx.strokeStyle = 'rgba(194,106,59,.08)'; ctx.lineWidth = 1;
-      for (let i = 0; i < this.stars.length; i++) {
-        const a = this.stars[i];
-        for (let j = i + 1; j < this.stars.length; j++) {
-          const c = this.stars[j];
-          const d = Math.hypot((a.x - c.x) * this.w, (a.y - c.y) * this.h);
-          if (d < 70) { ctx.globalAlpha = 1 - d / 70; ctx.beginPath(); ctx.moveTo(a.x * this.w, a.y * this.h); ctx.lineTo(c.x * this.w, c.y * this.h); ctx.stroke(); }
-        }
+      // 远景微星层（3 层，按视差深度错位 + 不同频率明灭）
+      for (let li = 0; li < this.micro.length; li++) {
+        const m = this.micro[li];
+        const a = this.reduced ? m.base : m.base * (0.55 + 0.45 * Math.sin(t * m.freq + m.depth * 5));
+        ctx.globalAlpha = Math.min(1, a);
+        const ox = this.px * m.depth, oy = this.py * m.depth;
+        ctx.drawImage(m.canvas, ox, oy, this.w, this.h);
       }
       ctx.globalAlpha = 1;
-      // 绘制星星
-      this.stars.forEach(s => {
-        const x = s.x * this.w, y = s.y * this.h;
-        const twinkle = 0.7 + 0.3 * Math.sin(t * s.speed + s.phase);
-        const hover = this.hoverId === s.id;
-        const pulse = s.pulse > 0 ? (1 - s.pulse) * 12 : 0;
-        const r = (3 + s.base * 2.2 + pulse) * (hover ? 1.35 : 1);
-        const alpha = s.book ? (s.book.available > 0 ? 0.9 : 0.45) : 0.5;
-        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2);
-        ctx.fillStyle = s.color; ctx.globalAlpha = alpha * twinkle;
-        ctx.shadowColor = s.color; ctx.shadowBlur = hover ? 22 : (12 + pulse);
-        ctx.fill(); ctx.shadowBlur = 0;
-        // 光晕
-        const g = ctx.createRadialGradient(x, y, 0, x, y, r * 2.5);
-        g.addColorStop(0, s.color); g.addColorStop(1, 'transparent');
-        ctx.fillStyle = g; ctx.globalAlpha = alpha * 0.18; ctx.beginPath(); ctx.arc(x, y, r * 2.5, 0, Math.PI * 2); ctx.fill();
-        if (s.book && (hover || this.encounterId === s.id)) {
-          ctx.globalAlpha = 1;
-          ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--txt').trim() || '#3b2f23';
-          ctx.font = '13px PingFang SC, Microsoft YaHei'; ctx.textAlign = 'center';
-          const text = s.book.title.length > 10 ? s.book.title.slice(0, 9) + '…' : s.book.title;
-          ctx.fillText(text, x, y + r + 18);
-          ctx.fillStyle = 'rgba(138,117,90,.8)'; ctx.font = '11px PingFang SC, Microsoft YaHei';
-          ctx.fillText((s.book.category || '') + ' · ' + (s.book.available > 0 ? '可借' : '已借完'), x, y + r + 32);
+      // 星座连线（稀疏骨架，随书籍星层一起视差）
+      if (this.links.length) {
+        ctx.strokeStyle = this.skyLine; ctx.lineWidth = 1;
+        ctx.beginPath();
+        for (const [i, j] of this.links) { ctx.moveTo(this.nodes[i].x + this.px, this.nodes[i].y + this.py); ctx.lineTo(this.nodes[j].x + this.px, this.nodes[j].y + this.py); }
+        ctx.stroke();
+      }
+      // 书籍星：精灵图 drawImage；双正弦闪烁（暗星振幅更大），浅色/深色均用 source-over（lighter 会糊成白斑）
+      for (let i = 0; i < this.nodes.length; i++) {
+        const n = this.nodes[i];
+        const grow = Math.min(1, Math.max(0, (now - this.t0 - n.delay) / 420));
+        if (grow <= 0) continue;
+        const ease = 1 - Math.pow(1 - grow, 3);
+        const tw = this.reduced ? 0.9
+          : 0.7 + 0.18 * Math.sin(t * n.speed + n.phase) + 0.12 * Math.sin(t * n.speed * 2.1 + n.phase2) + 0.04 * (1 - n.mag);
+        const hover = this.hoverId === n.id;
+        const pulse = n.pulse > 0 ? (1 - n.pulse) * 10 : 0;
+        const r = (n.r + pulse) * (hover ? 1.7 : 1) * (0.4 + 0.6 * ease);
+        const baseAlpha = n.book ? (n.book.available > 0 ? 0.95 : 0.4) : 0.42;
+        const alpha = baseAlpha * tw * ease;
+        const x = n.x + this.px, y = n.y + this.py;
+        const size = r * 8;
+        ctx.globalAlpha = Math.min(1, alpha);
+        ctx.drawImage(this.sprites[n.colorKey], x - size / 2, y - size / 2, size, size);
+        if (hover || this.encounterId === n.id) {
+          ctx.globalAlpha = 0.9;
+          ctx.strokeStyle = 'rgba(224,137,43,.9)'; ctx.lineWidth = 1.4;
+          ctx.beginPath(); ctx.arc(x, y, r * 2.4 + 6, 0, Math.PI * 2); ctx.stroke();
         }
-      });
+        if (n.pulse > 0) n.pulse = Math.max(0, n.pulse - 0.02);
+      }
       ctx.globalAlpha = 1;
-      // 脉冲衰减
-      this.stars.forEach(s => { if (s.pulse > 0) s.pulse = Math.max(0, s.pulse - 0.05); });
       this.raf = requestAnimationFrame(() => this.loop());
     }
     destroy() {
       if (this.raf) cancelAnimationFrame(this.raf);
       if (this._ro) this._ro.disconnect();
+      if (this._onTheme) window.removeEventListener('dh:theme', this._onTheme);
+      if (this.tip && this.tip.parentNode) this.tip.parentNode.removeChild(this.tip);
     }
   }
 
@@ -207,11 +413,14 @@ const Views = (() => {
           </div>
           <span class="star-count" id="star-count">—</span>
         </div>
-        <canvas id="star-canvas" class="star-canvas"></canvas>
-        <div class="star-legend">
-          <span><i class="dot lit"></i>可借</span>
-          <span><i class="dot dim"></i>已借完</span>
-          <span>✨ 点击星星查看图书</span>
+        <div class="star-stage">
+          <canvas id="star-canvas" class="star-canvas"></canvas>
+          <div class="star-sample" id="star-sample" style="display:none"></div>
+          <div class="star-legend">
+            <span><i class="dot lit"></i>可借</span>
+            <span><i class="dot dim"></i>已借完</span>
+            <span>✨ 点击星星查看图书</span>
+          </div>
         </div>
         <div class="star-loader" id="star-loader"><span></span><span></span><span></span></div>
       </div>
@@ -250,6 +459,7 @@ const Views = (() => {
       if (starScene) starScene.destroy();
       starScene = new StarScene(canvas, stars);
       const count = $('#star-count'); if (count) count.textContent = stars.length + ' 本';
+      renderStarSample(stars.length);
       renderCatBooks((booksResp && booksResp.books) || [], f.cat);
     } catch (e) {
       console.warn('[stars] 加载失败，启用环境星兜底', e);
@@ -257,10 +467,20 @@ const Views = (() => {
       if (starScene) starScene.destroy();
       starScene = new StarScene(canvas, []);
       const count = $('#star-count'); if (count) count.textContent = '—';
+      renderStarSample(0);
       renderCatBooks([], f.cat);
     } finally {
       wrap.classList.remove('loading');
     }
+  }
+  // 采样提示：总数超过渲染上限时，给出「换一批」入口
+  function renderStarSample(total) {
+    const box = $('#star-sample'); if (!box) return;
+    if (!starScene || total <= starScene.max) { box.style.display = 'none'; box.innerHTML = ''; return; }
+    box.style.display = 'flex';
+    box.innerHTML = `<span>星海过饱和，正在展示 ${starScene.max} / ${total} 颗</span><button id="star-reseed">换一批 🔄</button>`;
+    const btn = $('#star-reseed');
+    if (btn) btn.onclick = () => { if (starScene) starScene.reseed(); };
   }
   function fillGrid(grid, list) {
     grid.innerHTML = list.map(b => bookCard(b)).join('');
@@ -610,7 +830,12 @@ const Views = (() => {
           <span>${i + 1}. ${b.title} <small class="muted">${b.author || ''}</small></span><b style="color:var(--cyan)">${b.c}</b></div>`).join('')
       : '<div class="empty">暂无借阅记录</div>';
     API.aiStatus().then(s => {
-      const p = $('#ai-pill'); if (p) { p.textContent = 'AI · ' + (s.online ? '真实模型在线' : '离线规则'); p.className = 'ai-pill ' + (s.online ? 'on' : 'off'); }
+      const p = $('#ai-pill');
+      if (p) {
+        p.textContent = 'AI · ' + (s.online ? '真实模型在线' : `离线智能体 ${(s.tools || []).length} 工具`);
+        p.className = 'ai-pill ' + (s.online ? 'on' : 'off');
+        p.title = (s.intents || []).length + ' 类意图 / ' + (s.tools || []).join('、');
+      }
     }).catch(() => {});
   }
 
