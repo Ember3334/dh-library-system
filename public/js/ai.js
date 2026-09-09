@@ -133,8 +133,9 @@ const AIWidget = (() => {
       let sx = 0, sy = 0, sw = 0, sh = 0, dragging = false;
       const onMove = e => {
         if (!dragging) return;
-        const w = Math.max(320, Math.min(window.innerWidth - 48, sw + (e.clientX - sx)));
-        const h = Math.max(360, Math.min(window.innerHeight - 48, sh + (e.clientY - sy)));
+        // 面板右下角固定，把手在左上角：横向往右拖增大宽、纵向往下拖增大高
+        const w = Math.max(320, Math.min(window.innerWidth - 40, sw + (e.clientX - sx)));
+        const h = Math.max(360, Math.min(window.innerHeight - 40, sh + (e.clientY - sy)));
         panel.style.width = w + 'px';
         panel.style.height = h + 'px';
       };

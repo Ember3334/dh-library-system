@@ -79,8 +79,6 @@ button{font-family:inherit;cursor:pointer;border:none}
 
 /* 主内容 */
 #app{max-width:1240px;margin:0 auto;padding:26px;min-height:60vh}
-#foot{text-align:center;color:var(--dim);font-size:12px;padding:26px;display:flex;gap:20px;justify-content:center;flex-wrap:wrap}
-#foot a{color:var(--accent);font-weight:600}
 
 /* Hero / 搜索 */
 .hero{margin-bottom:18px}
@@ -419,8 +417,8 @@ body,#topbar,.card,.kpi,.book-card,.btn,.nav-ai,.nav-theme,.chip,.tab,.borrow-it
 
 /* AI 面板右下角拖拽调整大小手柄 */
 #ai-panel{position:fixed;resize:none;touch-action:auto}
-#ai-resizer{position:absolute;right:0;bottom:0;width:20px;height:20px;cursor:nwse-resize;z-index:5;user-select:none;touch-action:none}
-#ai-resizer::after{content:"";position:absolute;right:5px;bottom:5px;width:0;height:0;border-left:8px solid transparent;border-bottom:8px solid rgba(122,82,38,.55);border-radius:2px}
+#ai-resizer{position:absolute;left:0;top:0;width:22px;height:22px;cursor:nwse-resize;z-index:5;user-select:none;touch-action:none;display:grid;place-items:center;border-bottom-right-radius:10px}
+#ai-resizer::after{content:"";width:9px;height:9px;border-left:9px solid transparent;border-top:9px solid rgba(122,82,38,.55);border-radius:2px;transform:translate(2px,2px)}
 
 /* 星辰奇遇 · 抽卡弹窗 */
 #draw-mask{position:fixed;inset:0;z-index:120;background:rgba(26,24,33,.5);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);display:grid;place-items:center;padding:20px}
