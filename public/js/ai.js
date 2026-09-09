@@ -127,6 +127,32 @@ const AIWidget = (() => {
     $('#ai-input').addEventListener('keydown', e => { if (e.key === 'Enter') send(); });
     const rb = $('#ai-reset');
     if (rb) rb.addEventListener('click', reset);
+    // 自由伸缩：按住面板右下角手柄拖拽，实时调整宽高（带最小/视口限制）
+    const panel = $('#ai-panel'), rz = $('#ai-resizer');
+    if (rz && panel) {
+      let sx = 0, sy = 0, sw = 0, sh = 0, dragging = false;
+      const onMove = e => {
+        if (!dragging) return;
+        const w = Math.max(320, Math.min(window.innerWidth - 48, sw + (e.clientX - sx)));
+        const h = Math.max(360, Math.min(window.innerHeight - 48, sh + (e.clientY - sy)));
+        panel.style.width = w + 'px';
+        panel.style.height = h + 'px';
+      };
+      const onUp = () => {
+        dragging = false;
+        document.body.style.userSelect = '';
+        window.removeEventListener('pointermove', onMove);
+        window.removeEventListener('pointerup', onUp);
+      };
+      rz.addEventListener('pointerdown', e => {
+        dragging = true; sx = e.clientX; sy = e.clientY;
+        sw = panel.offsetWidth; sh = panel.offsetHeight;
+        e.preventDefault();
+        document.body.style.userSelect = 'none';
+        window.addEventListener('pointermove', onMove);
+        window.addEventListener('pointerup', onUp);
+      });
+    }
     // 点击推荐书目卡片 → 跳详情
     $('#ai-log').addEventListener('click', e => {
       const chip = e.target.closest('.ai-chip');

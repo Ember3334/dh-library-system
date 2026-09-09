@@ -182,6 +182,7 @@ function route() {
   if (hash === '#/admin-login') return run(Views.adminLogin);
   if (hash === '#/rankings') return run(Views.rankings);
   if (hash === '#/dh') return run(Views.dh);
+  if (hash === '#/draw') return run(async () => { await Views.home(); setTimeout(() => Views.openDraw(), 500); });
   if (hash === '#/screen') {
     if (!State.user || (State.user.role !== '馆员' && State.user.role !== '管理员')) { toast('需要馆员或管理员权限', 'err'); location.hash = '#/home'; return; }
     return run(Views.screen);

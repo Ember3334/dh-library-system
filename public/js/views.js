@@ -66,6 +66,8 @@ const Views = (() => {
       this.reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       // 视差：鼠标驱动的目标位置 + 平滑跟随
       this.px = 0; this.py = 0; this.tgx = 0; this.tgy = 0;
+      // 整体缓旋（rad/s）：让星系缓慢绕中心自转，配合闪烁保持星空持续动态
+      this.rot = 0; this.rotSpeed = 0.05; this._lastT = performance.now();
       this.sprites = {};
       Object.keys(STAR_PALETTE).forEach(k => { this.sprites[k] = makeStarSprite(STAR_PALETTE[k]); });
       this.tip = document.createElement('div');
@@ -273,6 +275,12 @@ const Views = (() => {
       const { cell, map } = this.grid;
       // 鼠标坐标要反算视差：星在屏幕上位于 n.x + this.px，故用 mx - this.px 还原基础坐标
       mx -= this.px; my -= this.py;
+      // 再反算整体旋转：把屏幕坐标逆旋回未旋转的基础坐标，否则旋转后命中会错位
+      const cx = this.w / 2, cy = this.h / 2;
+      const cos = Math.cos(this.rot), sin = Math.sin(this.rot);
+      const dx = mx - cx, dy = my - cy;
+      mx = cx + dx * cos + dy * sin;
+      my = cy - dx * sin + dy * cos;
       let best = null, bd = Infinity;
       for (let ox = -1; ox <= 1; ox++) for (let oy = -1; oy <= 1; oy++) {
         const b = map.get((Math.floor(mx / cell) + ox) + ',' + (Math.floor(my / cell) + oy)); if (!b) continue;
@@ -336,12 +344,25 @@ const Views = (() => {
       // 视差平滑跟随
       if (!this.reduced) { this.px += (this.tgx - this.px) * 0.08; this.py += (this.tgy - this.py) * 0.08; }
       else { this.px = 0; this.py = 0; }
+      // 整体缓旋：帧率无关地推进，让星系绕中心自转
+      if (!this.reduced) {
+        const dt = Math.min(0.05, (now - this._lastT) / 1000);
+        this.rot += this.rotSpeed * dt;
+      }
+      this._lastT = now;
+      const cx = this.w / 2, cy = this.h / 2;
+      const cos = Math.cos(this.rot), sin = Math.sin(this.rot);
+      // 绕中心旋转后叠加视差：返回屏幕坐标
+      const rotY = (x, y) => { const dx = x - cx, dy = y - cy; return [cx + dx * cos - dy * sin + this.px, cy + dx * sin + dy * cos + this.py]; };
       ctx.clearRect(0, 0, this.w, this.h);
-      // 星云辉光（按主题叠加模式：深色 lighter 增亮，浅色 source-over 着色）
+      // 星云辉光（按主题叠加模式：深色 lighter 增亮，浅色 source-over 着色）；随星系一起旋转、并按视差轻微错位
       if (this.nebula) {
         ctx.globalCompositeOperation = this.glowMode;
         ctx.globalAlpha = this.reduced ? 0.85 : 0.6 + 0.12 * Math.sin(t * 0.25);
-        ctx.drawImage(this.nebula, this.px * 0.5, this.py * 0.5, this.w, this.h);
+        ctx.save();
+        ctx.translate(cx, cy); ctx.rotate(this.rot);
+        ctx.drawImage(this.nebula, -this.w / 2 + this.px * 0.5, -this.h / 2 + this.py * 0.5, this.w, this.h);
+        ctx.restore();
         ctx.globalCompositeOperation = 'source-over';
         ctx.globalAlpha = 1;
       }
@@ -354,11 +375,15 @@ const Views = (() => {
         ctx.drawImage(m.canvas, ox, oy, this.w, this.h);
       }
       ctx.globalAlpha = 1;
-      // 星座连线（稀疏骨架，随书籍星层一起视差）
+      // 星座连线（稀疏骨架，随书籍星层一起视差与旋转）
       if (this.links.length) {
         ctx.strokeStyle = this.skyLine; ctx.lineWidth = 1;
         ctx.beginPath();
-        for (const [i, j] of this.links) { ctx.moveTo(this.nodes[i].x + this.px, this.nodes[i].y + this.py); ctx.lineTo(this.nodes[j].x + this.px, this.nodes[j].y + this.py); }
+        for (const [i, j] of this.links) {
+          const [ax, ay] = rotY(this.nodes[i].x, this.nodes[i].y);
+          const [bx, by] = rotY(this.nodes[j].x, this.nodes[j].y);
+          ctx.moveTo(ax, ay); ctx.lineTo(bx, by);
+        }
         ctx.stroke();
       }
       // 书籍星：精灵图 drawImage；双正弦闪烁（暗星振幅更大），浅色/深色均用 source-over（lighter 会糊成白斑）
@@ -374,7 +399,7 @@ const Views = (() => {
         const r = (n.r + pulse) * (hover ? 1.7 : 1) * (0.4 + 0.6 * ease);
         const baseAlpha = n.book ? (n.book.available > 0 ? 0.95 : 0.4) : 0.42;
         const alpha = baseAlpha * tw * ease;
-        const x = n.x + this.px, y = n.y + this.py;
+        const [x, y] = rotY(n.x, n.y);
         const size = r * 8;
         ctx.globalAlpha = Math.min(1, alpha);
         ctx.drawImage(this.sprites[n.colorKey], x - size / 2, y - size / 2, size, size);
@@ -435,8 +460,7 @@ const Views = (() => {
         <div class="search-row">
           <input id="q" placeholder="搜索书名 / 作者 / 标签…" value="${f.q}">
           <button class="btn" id="s-btn">搜索</button>
-          <button class="btn ai-search-btn" id="ai-btn">✨ AI 荐书</button>
-          <button class="btn ghost" id="encounter-btn">🌠 星尘奇遇</button>
+          <button class="btn ghost" id="encounter-btn">🎴 星辰奇遇 · 抽卡</button>
         </div>
         <div class="chips" id="chips">
           <span class="chip ${!f.cat ? 'active' : ''}" data-cat="">全部</span>
@@ -470,8 +494,7 @@ const Views = (() => {
         </div>
         <div class="book-grid" id="cat-grid"></div>
       </section>`;
-    $('#ai-btn').addEventListener('click', () => { if (window.AIWidget) AIWidget.toggle(); });
-    $('#encounter-btn').addEventListener('click', () => { if (starScene) starScene.encounter(); });
+    $('#encounter-btn').addEventListener('click', () => openDraw());
     $('#q').addEventListener('input', e => { f.q = e.target.value; loadStars(); });
     $('#q').addEventListener('keydown', e => { if (e.key === 'Enter') loadStars(); });
     $('#s-btn').addEventListener('click', loadStars);
@@ -1203,8 +1226,67 @@ const Views = (() => {
     return `<div class="kpi"><div class="v" ${color ? `style="color:${color}"` : ''}>${v}</div><div class="k">${k}</div></div>`;
   }
   function $$(s, r = document) { return Array.from(r.querySelectorAll(s)); }
+  // ---------------- 星辰奇遇 · 抽卡 ----------------
+  function dCover(b) {
+    const attrs = `data-id="${b.id}" data-title="${esc(b.title)}" data-author="${esc(b.author)}" data-category="${esc(b.category)}"`;
+    if (b.cover) return `<img src="${esc(b.cover)}" alt="" ${attrs} onerror="dCvFallback(this)">`;
+    if (b.call_no) return `<img src="${coverUrl(b.call_no)}" alt="" ${attrs} onerror="dCvFallback(this)">`;
+    return `<div class="cx" style="background:${colorForCat(b.category)}">${esc((b.title || '?').slice(0, 1))}</div>`;
+  }
+  // 复用全局 coverFallback 生成与全站一致的艺术书封；无则兜底为书名占位
+  window.dCvFallback = img => {
+    if (window.coverFallback) window.coverFallback(img);
+    else img.parentNode.innerHTML = '<div class="cx">📖</div>';
+  };
+  function gachaPool() {
+    if (starScene && starScene.nodes) {
+      const arr = starScene.nodes.filter(n => n.book).map(n => n.book);
+      if (arr.length) return arr;
+    }
+    return [];
+  }
+  function openDraw() { renderDraw(gachaPool()); }
+  function renderDraw(pool) {
+    let mask = $('#draw-mask');
+    if (!mask) { mask = document.createElement('div'); mask.id = 'draw-mask'; document.body.appendChild(mask); }
+    mask.innerHTML = `<div id="draw-card">
+      <h3>🎴 星辰奇遇</h3>
+      <div class="d-sub">从浩瀚知识星海随机抽取一本好书</div>
+      <div class="d-reveal" id="d-reveal"><div class="d-inner">
+        <div class="d-face d-back" id="d-back"><div class="star">✦</div><div class="dback-txt">点击翻牌 · 遇见奇遇</div></div>
+        <div class="d-face d-front" id="d-front"></div>
+      </div></div>
+      <div class="d-actions">
+        <button class="btn ghost" id="d-again">再抽一张</button>
+        <button class="btn" id="d-view">查看详情</button>
+        <button class="btn ghost sm" id="d-close">关闭</button>
+      </div></div>`;
+    mask.classList.remove('hidden');
+    const reveal = $('#d-reveal'), front = $('#d-front');
+    let cur = null;
+    const pick = () => {
+      const b = pool.length ? pool[Math.floor(Math.random() * pool.length)] : null;
+      front.innerHTML = b ? (
+        `<div class="dc-img">${dCover(b)}</div>
+        <div class="dc-body">
+          <h4>${esc(b.title)}</h4>
+          <div class="m">${esc(b.author || '未知')}${b.category ? ' · ' + esc(b.category) : ''}${b.call_no ? ' · ' + esc(b.call_no) : ''}</div>
+          <span class="st ${b.available > 0 ? 'ok' : 'no'}">${b.available > 0 ? '可借 ' + b.available + ' 本' : '已借完'}</span>
+        </div>`
+      ) : `<div class="dc-img"><div class="cx" style="color:rgba(255,255,255,.8)">🌌</div></div><div class="dc-body"><h4>暂无馆藏</h4><div class="m">换个星区再试试</div></div>`;
+      return b;
+    };
+    cur = pick();
+    reveal.classList.remove('flip');
+    $('#d-back').addEventListener('click', () => { if (!reveal.classList.contains('flip')) reveal.classList.add('flip'); });
+    $('#d-again').onclick = () => { cur = pick(); reveal.classList.remove('flip'); setTimeout(() => reveal.classList.add('flip'), 40); };
+    $('#d-view').onclick = () => { if (cur && cur.id) { location.hash = '#/book/' + cur.id; closeDraw(); } };
+    $('#d-close').onclick = closeDraw;
+    mask.addEventListener('click', e => { if (e.target === mask) closeDraw(); });
+  }
+  function closeDraw() { const m = $('#draw-mask'); if (m) m.classList.add('hidden'); }
   function cleanupStars() { if (starScene) { starScene.destroy(); starScene = null; } }
 
-  return { home, bookDetail, login, adminLogin, register, my, admin, adminCatalog, adminImport, adminReaders, adminLoans, screen, rankings, dh, cleanupStars };
+  return { home, bookDetail, login, adminLogin, register, my, admin, adminCatalog, adminImport, adminReaders, adminLoans, screen, rankings, dh, cleanupStars, openDraw };
 })();
 window.Views = Views;

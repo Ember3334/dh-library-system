@@ -130,7 +130,7 @@ button{font-family:inherit;cursor:pointer;border:none}
 @keyframes dots{0%,100%{opacity:.3;transform:scale(.7)}50%{opacity:1;transform:scale(1)}}
 
 /* 图书网格 */
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:18px}
+.grid,.book-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:18px}
 .book-card{
   background:var(--card);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;
   transition:.25s;cursor:pointer;position:relative;animation:rise .4s both;
@@ -356,11 +356,12 @@ body,#topbar,.card,.kpi,.book-card,.btn,.nav-ai,.nav-theme,.chip,.tab,.borrow-it
 .ai-persona small{display:block;font-size:11px;color:var(--muted)}
 
 /* 排行榜 */
-.rank-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:18px;align-items:stretch}
-.rank-grid>.card{display:flex;flex-direction:column}
-.rank-grid>.card>div:last-child{flex:1}
-@media(max-width:1100px){.rank-grid{grid-template-columns:repeat(2,1fr)}}
-@media(max-width:640px){.rank-grid{grid-template-columns:1fr}}
+/* 用 minmax(0,1fr) 而非 1fr：默认 1fr=minmax(auto,1fr)，长书名(nowrap)会撑宽列导致第4列溢出被裁 */
+.rank-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px;align-items:stretch}
+.rank-grid>.card{display:flex;flex-direction:column;min-width:0}
+.rank-grid>.card>div:last-child{flex:1;min-width:0}
+@media(max-width:1100px){.rank-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:640px){.rank-grid{grid-template-columns:minmax(0,1fr)}}
 .demo-note{background:rgba(224,137,43,.12);border:1px solid rgba(224,137,43,.4);color:#8a5a1e;padding:10px 14px;border-radius:12px;font-size:13px;margin-bottom:16px;line-height:1.6}
 .demo-note b{color:var(--accent)}
 .rank-item{display:flex;align-items:center;gap:12px;padding:10px 12px;border-bottom:1px solid var(--line);cursor:pointer;transition:.2s}
@@ -415,3 +416,38 @@ body,#topbar,.card,.kpi,.book-card,.btn,.nav-ai,.nav-theme,.chip,.tab,.borrow-it
   .star-legend{gap:10px;font-size:11px;left:10px;bottom:8px}
   .star-sample{right:10px;top:10px;font-size:11px}
 }
+
+/* AI 面板右下角拖拽调整大小手柄 */
+#ai-panel{position:fixed;resize:none;touch-action:auto}
+#ai-resizer{position:absolute;right:0;bottom:0;width:20px;height:20px;cursor:nwse-resize;z-index:5;user-select:none;touch-action:none}
+#ai-resizer::after{content:"";position:absolute;right:5px;bottom:5px;width:0;height:0;border-left:8px solid transparent;border-bottom:8px solid rgba(122,82,38,.55);border-radius:2px}
+
+/* 星辰奇遇 · 抽卡弹窗 */
+#draw-mask{position:fixed;inset:0;z-index:120;background:rgba(26,24,33,.5);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);display:grid;place-items:center;padding:20px}
+#draw-mask.hidden{display:none}
+#draw-card{background:var(--card-solid);border:1px solid var(--line);border-radius:22px;padding:22px 24px;width:min(380px,94vw);box-shadow:var(--shadow);text-align:center;animation:drawIn .35s cubic-bezier(.22,.7,.3,1) both}
+@keyframes drawIn{from{opacity:0;transform:translateY(20px) scale(.96)}to{opacity:1;transform:none}}
+#draw-card h3{margin:0 0 4px;font-size:19px}
+#draw-card .d-sub{color:var(--muted);font-size:13px;margin-bottom:16px}
+.d-reveal{width:190px;height:268px;margin:0 auto 18px;perspective:900px}
+.d-inner{position:relative;width:100%;height:100%;transition:transform .65s cubic-bezier(.3,.7,.2,1);transform-style:preserve-3d}
+.d-reveal.flip .d-inner{transform:rotateY(180deg)}
+.d-face{position:absolute;inset:0;backface-visibility:hidden;-webkit-backface-visibility:hidden;border-radius:16px;overflow:hidden;box-shadow:0 14px 34px rgba(0,0,0,.3)}
+.d-back{display:grid;place-items:center;background:linear-gradient(145deg,#3b1f4a,#6a2f6b 55%,#b0642a);cursor:pointer}
+.d-back .star{font-size:58px;filter:drop-shadow(0 0 18px rgba(255,220,150,.8));animation:twinkleGlow 1.6s ease-in-out infinite}
+.d-back .dback-txt{position:absolute;bottom:18px;left:0;right:0;color:rgba(255,240,214,.9);font-size:13px;letter-spacing:1px}
+@keyframes twinkleGlow{0%,100%{opacity:.75;transform:scale(.96)}50%{opacity:1;transform:scale(1.06)}}
+.d-front{transform:rotateY(180deg);display:flex;flex-direction:column;background:var(--card)}
+.d-front .dc-img{flex:1;min-height:0;display:grid;place-items:center;overflow:hidden;position:relative}
+.d-front .dc-img img{width:100%;height:100%;object-fit:cover}
+.d-front .dc-img .cx{width:100%;height:100%;display:grid;place-items:center;font-size:52px;font-weight:800;color:rgba(255,255,255,.92)}
+.d-front .dc-body{padding:12px 14px;background:var(--card-solid);text-align:left}
+.d-front .dc-body h4{margin:0 0 4px;font-size:16px;line-height:1.3}
+.d-front .dc-body .m{color:var(--muted);font-size:12px}
+.d-front .dc-body .st{display:inline-block;margin-top:8px;font-size:11px;padding:3px 10px;border-radius:999px;font-weight:700}
+.d-front .dc-body .st.ok{color:#2f7d46;background:rgba(94,158,94,.16)}
+.d-front .dc-body .st.no{color:#9c3b33;background:rgba(197,82,74,.16)}
+.d-actions{display:flex;gap:10px;justify-content:center}
+.d-actions .btn{flex:1}
+.d-shake{animation:drawShake .4s}
+@keyframes drawShake{0%,100%{transform:translateX(0)}25%{transform:translateX(-7px)}75%{transform:translateX(7px)}}
