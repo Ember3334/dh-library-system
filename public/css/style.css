@@ -100,7 +100,7 @@ button{font-family:inherit;cursor:pointer;border:none}
 /* 关键：stage 为固定高度容器，canvas 绝对定位铺满。
    否则 canvas 高度撑高父容器 → ResizeObserver 再次放大 → 无限拉长 */
 .star-wrap{position:relative;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow)}
-.star-stage{position:relative;width:100%;height:var(--star-h,520px);overflow:hidden;background:radial-gradient(125% 120% at 50% 46%,transparent 48%,var(--sky-vignette) 100%),radial-gradient(130% 95% at 28% 16%,var(--sky-2),transparent 58%),linear-gradient(158deg,var(--sky-1),var(--sky-2) 44%,var(--sky-3))}
+.star-stage{position:relative;width:100%;height:var(--star-h,520px);max-height:80vh;overflow:hidden;background:radial-gradient(125% 120% at 50% 46%,transparent 48%,var(--sky-vignette) 100%),radial-gradient(130% 95% at 28% 16%,var(--sky-2),transparent 58%),linear-gradient(158deg,var(--sky-1),var(--sky-2) 44%,var(--sky-3))}
 .star-canvas{position:absolute;inset:0;display:block;width:100%;height:100%}
 .star-wrap.loading .star-canvas{opacity:.6}
 /* 悬停信息浮层（DOM 渲染，比 canvas 文字清晰且不吃性能） */
@@ -116,6 +116,8 @@ button{font-family:inherit;cursor:pointer;border:none}
   background:var(--sky-panel);border:1px solid rgba(180,200,255,.22);border-radius:999px;padding:5px 6px 5px 12px;backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px)}
 .star-sample button{font-size:12px;padding:3px 10px;border-radius:999px;border:1px solid rgba(180,200,255,.22);background:rgba(20,30,54,.6);color:var(--sky-ink);cursor:pointer;transition:.2s}
 .star-sample button:hover{border-color:var(--ai);color:#ffd9a3}
+.star-reseed{font-size:12px;padding:4px 12px;border-radius:999px;border:1px solid rgba(180,200,255,.22);background:var(--sky-panel);color:var(--sky-ink);cursor:pointer;transition:.2s;backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px)}
+.star-reseed:hover{border-color:var(--ai);color:#ffd9a3}
 .star-legend{position:absolute;left:14px;bottom:12px;display:flex;gap:16px;align-items:center;font-size:12px;color:var(--sky-ink);background:var(--sky-panel);padding:6px 12px;border-radius:999px;border:1px solid rgba(180,200,255,.22);backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px)}
 .star-legend .dot{width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:5px}
 .star-legend .dot.lit{background:var(--ai);box-shadow:0 0 8px var(--ai)}

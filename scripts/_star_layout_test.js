@@ -79,11 +79,12 @@ console.log('最小星间距:', minD.toFixed(2), 'px');
 console.log('连线数:', scene.links.length);
 console.log('构建耗时:', cost, 'ms');
 
-// 「换一批」应换出不同的星
-const before = scene.nodes.map(n => n.id).join(',');
+// 「焕新星图」应重新排布（节点 id 稳定，但位置变化）
+const before = scene.nodes.map(n => n.x.toFixed(1) + ',' + n.y.toFixed(1)).join('|');
 scene.reseed();
-const after = scene.nodes.map(n => n.id).join(',');
-console.log('换一批后是否变化:', before !== after);
+const after = scene.nodes.map(n => n.x.toFixed(1) + ',' + n.y.toFixed(1)).join('|');
+console.log('焕新星图后位置变化:', before !== after);
+console.log('星云辉光已生成:', !!scene.nebula, '| 辉光叠加模式:', scene.glowMode);
 
 // 命中检测（注意 reseed 会重建 nodes 数组，需重新取引用）
 const probe = scene.nodes[10];

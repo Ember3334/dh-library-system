@@ -22,7 +22,7 @@ const AIWidget = (() => {
     search: '检索', recommend: '荐书', similar: '相似书', digest: '导读', opinion: '口碑',
     availability: '库存', stats: '统计', hot: '热门', category: '分类', my_borrows: '我的借阅',
     overdue: '逾期', rule: '规则', more: '换一批', fallback: '未命中', greeting: '问候',
-    who: '能力介绍', thanks: '致谢'
+    who: '能力介绍', thanks: '致谢', borrow: '借书', return_book: '还书'
   };
   function coverHTML(b) {
     if (b.cover) return `<img class="c" src="${esc(b.cover)}" alt="" onerror="this.style.visibility='hidden'">`;
@@ -56,7 +56,7 @@ const AIWidget = (() => {
     }
     if (chips && chips.length && who === 'ai') {
       const c = document.createElement('div'); c.className = 'ai-chips';
-      c.innerHTML = chips.slice(0, 4).map(x => `<button class="ai-chip">${esc(x)}</button>`).join('');
+      c.innerHTML = chips.slice(0, 4).map(x => `<button class="ai-chip"${x === '查看我的借阅' ? ' data-go="#/my"' : ''}>${esc(x)}</button>`).join('');
       el.appendChild(c);
     }
     log.appendChild(el);
@@ -105,8 +105,8 @@ const AIWidget = (() => {
         ? '真实大模型在线 · ' + (s.model || '')
         : `离线智能体 · ${(s.intents || []).length} 类意图 / ${(s.tools || []).length} 个工具`;
     }
-    addMsg('你好，我是数智馆员小文 🌟\n我能直接查馆藏真实数据：\n· 找书 / 荐书 / 相似书\n· 查库存、索书号、馆藏位置\n· 查你的借阅与到期\n· 馆藏统计、热门榜、读者口碑\n· 借阅规则答疑、单本导读', 'ai',
-      [], ['推荐几本书', '馆藏有多少本书？', '热门榜', '我借了哪些书？']);
+    addMsg('你好，我是数智馆员小文 🌟\n我能直接查馆藏真实数据，还能帮你办事：\n· 找书 / 荐书 / 相似书\n· 查库存、索书号、馆藏位置\n· 查你的借阅与到期\n· 帮你提交借阅申请、归还图书（登录读者账号后）\n· 馆藏统计、热门榜、读者口碑\n· 借阅规则答疑、单本导读', 'ai',
+      [], ['帮我借《乡土中国》', '推荐几本书', '热门榜', '馆藏有多少本书？']);
   }
   function toggle() {
     const p = $('#ai-panel');
@@ -130,7 +130,11 @@ const AIWidget = (() => {
     // 点击推荐书目卡片 → 跳详情
     $('#ai-log').addEventListener('click', e => {
       const chip = e.target.closest('.ai-chip');
-      if (chip) { send(chip.textContent.trim()); return; }
+      if (chip) {
+        const go = chip.dataset.go;
+        if (go) { location.hash = go; $('#ai-panel').classList.add('hidden'); return; }
+        send(chip.textContent.trim()); return;
+      }
       const b = e.target.closest('.b');
       if (b) { location.hash = '#/book/' + b.dataset.id; $('#ai-panel').classList.add('hidden'); }
     });

@@ -89,6 +89,8 @@ const INTENT_RULES = [
   ['greeting', /^(你好|您好|hi|hello|在吗|嗨|哈喽|早上好|晚上好|中午好)/i],
   ['thanks', /(谢谢|感谢|多谢|thx|thanks|辛苦了)/i],
   ['who', /(你是谁|你叫什么|什么模型|你能做什么|你会什么|能干什么|有什么功能|能力)/],
+  ['borrow', /(帮我借|帮我校|我要借|我想借|申请借|借阅一下|借一下|去借|借给|借《|借这本|借那本|办理借阅|把.*借了|借.*这本书|办个借)/],
+  ['return_book', /(帮我还|我要还|还《|还掉|办理归还|还书|把.*还了|归还.*这本|还.*这本书)/],
   ['my_borrows', /(我借|我的借阅|借了|还了没|到期|什么时候还|我的书|我还|借阅记录)/],
   ['overdue', /(逾期|超期|滞纳|罚款|过期)/],
   ['stats', /(多少本|馆藏|总共有|统计|分类分布|占比|数据概况|规模|一共有)/],
@@ -306,6 +308,34 @@ function reviewsOf(bookId) {
   return { rows, n: agg.n || 0, avg: agg.avg || 0 };
 }
 
+// 执行类动作：提交借阅申请 / 归还（与 /api/borrow、/api/return 同源逻辑，供 AI agent 落地调用）
+function doBorrow(uid, bookId) {
+  if (!uid) return { error: '请先登录读者账号，我才能帮你借书。' };
+  const user = db.prepare('SELECT * FROM users WHERE id=?').get(uid);
+  if (!user) return { error: '账号不存在，请重新登录。' };
+  if (user.role !== '读者') return { error: `当前账号为「${user.role}」，只有读者账号可以借阅。` };
+  const book = db.prepare(`SELECT ${F} FROM books WHERE id=?`).get(bookId);
+  if (!book) return { error: '馆藏里没找到这本书。' };
+  if (book.available <= 0) return { error: `《${book.title}》库存为 0，暂不可借（可等归还或联系馆员）。` };
+  const active = db.prepare("SELECT COUNT(*) c FROM borrows WHERE user_id=? AND status IN ('待审批','待取书','借出','逾期')").get(uid).c;
+  if (active >= user.max_borrow) return { error: `你的借阅额度已满（最多 ${user.max_borrow} 本），请先归还部分图书。` };
+  const same = db.prepare("SELECT id FROM borrows WHERE user_id=? AND book_id=? AND status IN ('待审批','待取书','借出','逾期')").get(uid, bookId);
+  if (same) return { error: `你已在借阅或申请《${book.title}》，无需重复。` };
+  const due = db.prepare(`SELECT datetime('now','+${BORROW_DAYS} days') d`).get().d;
+  const info = db.prepare(`INSERT INTO borrows (user_id,book_id,due_date,status,request_date) VALUES (?,?,?,'待审批',datetime('now'))`).run(uid, bookId, due);
+  return { record: db.prepare('SELECT * FROM borrows WHERE id=?').get(info.lastInsertRowid), book };
+}
+function doReturn(uid, bookId) {
+  if (!uid) return { error: '请先登录读者账号，我才能帮你还书。' };
+  const book = db.prepare(`SELECT ${F} FROM books WHERE id=?`).get(bookId);
+  if (!book) return { error: '馆藏里没找到这本书。' };
+  const rec = db.prepare("SELECT * FROM borrows WHERE user_id=? AND book_id=? AND status IN ('借出','逾期','待取书') ORDER BY id DESC LIMIT 1").get(uid, bookId);
+  if (!rec) return { error: `没有找到《${book.title}》的进行中借阅记录（也许已归还，或尚未借出）。` };
+  db.prepare("UPDATE borrows SET status='已还', return_date=datetime('now') WHERE id=?").run(rec.id);
+  db.prepare('UPDATE books SET available=available+1 WHERE id=?').run(bookId);
+  return { book, wasOverdue: rec.status === '逾期' };
+}
+
 // ==========================================================
 // 三、规则知识库
 // ==========================================================
@@ -396,7 +426,9 @@ const TOOL_SPECS = [
   { name: 'stats', desc: '馆藏与借阅数据统计', args: {} },
   { name: 'myBorrows', desc: '查询当前读者的借阅记录与到期情况', args: {} },
   { name: 'availability', desc: '查某本书的库存、索书号与馆藏位置', args: { book: '书名' } },
-  { name: 'reviews', desc: '查某本书的读者评价与口碑', args: { book: '书名' } }
+  { name: 'reviews', desc: '查某本书的读者评价与口碑', args: { book: '书名' } },
+  { name: 'borrow', desc: '为当前登录读者提交借阅申请（需读者账号）', args: { book: '书名' } },
+  { name: 'returnBook', desc: '为当前登录读者归还某本在借图书（需读者账号）', args: { book: '书名' } }
 ];
 function runToolByName(name, args, ctx) {
   switch (name) {
@@ -409,12 +441,17 @@ function runToolByName(name, args, ctx) {
     case 'myBorrows': return { borrows: myBorrows(ctx.uid) };
     case 'availability': { const b = findBook(args.book || ''); return b ? { books: [shape(b)] } : {}; }
     case 'reviews': { const b = findBook(args.book || ''); return b ? { anchor: shape(b), reviews: reviewsOf(b.id) } : {}; }
+    case 'borrow': { const b = findBook(args.book || ''); if (!b) return {}; const r = doBorrow(ctx.uid, b.id); return r.error ? { error: r.error } : { books: [shape(r.book)], borrowed: shape(r.book) }; }
+    case 'returnBook': { const b = findBook(args.book || ''); if (!b) return {}; const r = doReturn(ctx.uid, b.id); return r.error ? { error: r.error } : { books: [shape(r.book)], returned: shape(r.book) }; }
     default: return {};
   }
 }
 function toolResultToText(r) {
   const parts = [];
   if (r.books && r.books.length) parts.push('图书：' + r.books.map(b => `《${b.title}》${b.author ? '（' + b.author + '）' : ''}[${b.category || '未分类'}]${b.available > 0 ? '可借' : '已借完'}${b.location ? '位置' + b.location : ''}`).join('；'));
+  if (r.error) parts.push('⚠️ ' + r.error);
+  if (r.borrowed) parts.push('已提交借阅申请：《' + r.borrowed.title + '》');
+  if (r.returned) parts.push('已归还：《' + r.returned.title + '》');
   if (r.anchor) parts.push('目标书：' + `《${r.anchor.title}》${r.anchor.author || ''}｜${r.anchor.category || ''}｜馆藏${r.anchor.available}/${r.anchor.total}${r.anchor.location ? '｜位置' + r.anchor.location : ''}`);
   if (r.stats) {
     const s = r.stats;
@@ -503,10 +540,18 @@ function toolStats() {
 function toolMyBorrows(uid) {
   const rows = myBorrows(uid);
   if (!rows) return { reply: '登录后我才能查到你的借阅记录哦～ 点右上角「登录」即可。', books: [], intent: 'my_borrows', chips: ['怎么登录？'] };
-  const live = rows.filter(r => r.status === '借出' || r.status === '逾期' || r.status === '待取书');
+  const live = rows.filter(r => r.status === '借出' || r.status === '逾期' || r.status === '待取书' || r.status === '待审批');
   if (!live.length) return { reply: '你当前没有在借的图书。想让我推荐几本吗？', books: shapeAll(recommend(uid, 3)), intent: 'my_borrows', chips: ['推荐几本书'] };
-  const txt = live.map(r => `· 《${r.title}》${r.status}${r.daysLeft !== null ? (' · ' + (r.daysLeft >= 0 ? '还剩 ' + r.daysLeft + ' 天' : '已逾期 ' + (-r.daysLeft) + ' 天')) : ''}`).join('\n');
-  return { reply: `你在借 ${live.length} 本：\n${txt}\n逾期会影响后续借阅，记得及时归还～`, books: [], intent: 'my_borrows', chips: ['怎么还书？', '借期是多久？'] };
+  const fmtStatus = (r) => {
+    if (r.status === '待审批') return '⏳ 待馆员审批';
+    if (r.status === '待取书') return '📦 待取书';
+    if (r.status === '借出' && r.daysLeft !== null) return '📖 借出 · ' + (r.daysLeft >= 0 ? '还剩 ' + r.daysLeft + ' 天' : '已逾期 ' + (-r.daysLeft) + ' 天');
+    if (r.status === '借出') return '📖 借出';
+    if (r.status === '逾期') return '⚠️ 逾期 ' + (-r.daysLeft) + ' 天';
+    return r.status;
+  };
+  const txt = live.map(r => `· 《${r.title}》${fmtStatus(r)}`).join('\n');
+  return { reply: `你有 ${live.length} 条借阅（含待审批）：\n${txt}\n⏳ 待审批需馆员确认后到馆取书；逾期请尽快归还～`, books: [], intent: 'my_borrows', chips: ['怎么还书？', '借期是多久？'] };
 }
 function toolAvailability(slots, forceBook) {
   const b = forceBook || findBook(slots.titles[0] || slots.clean);
@@ -583,8 +628,8 @@ function smalltalk(kind) {
   if (kind === 'greeting') return { reply: '你好呀～ 我是小文，数文图书室的 AI 馆员。找书、荐书、查借阅、问规则，都可以直接问我。', books: [], intent: 'greeting', chips: ['推荐几本书', '馆藏有多少本书？', '我借了哪些书？'] };
   if (kind === 'thanks') return { reply: '不客气～ 还要找别的书随时叫我。', books: [], intent: 'thanks', chips: ['推荐几本书'] };
   return {
-    reply: '我是数智馆员小文，能做的事：\n· 检索馆藏（书名 / 作者 / 标签 / 索书号）\n· 个性化荐书与相似书推荐\n· 查库存、索书号、馆藏位置\n· 查你的借阅记录与到期提醒\n· 馆藏统计、热门榜、读者口碑\n· 借阅规则与流程答疑\n· 为单本书生成 AI 导读',
-    books: [], intent: 'who', chips: ['推荐几本书', '馆藏统计', '热门榜']
+    reply: '我是数智馆员小文，能做的事：\n· 检索馆藏（书名 / 作者 / 标签 / 索书号）\n· 个性化荐书与相似书推荐\n· 查库存、索书号、馆藏位置\n· 查你的借阅记录与到期提醒\n· 帮你提交借阅申请、归还图书（需登录读者账号）\n· 馆藏统计、热门榜、读者口碑\n· 借阅规则与流程答疑\n· 为单本书生成 AI 导读',
+    books: [], intent: 'who', chips: ['帮我借《乡土中国》', '馆藏统计', '热门榜']
   };
 }
 
@@ -643,6 +688,28 @@ function offlineAnswer(q, slots, intent, uid, sess) {
     case 'availability': return toolAvailability(slots, anchor) || toolSearch(slots, q) || fallbackAnswer(uid, slots);
     case 'recommend': return toolRecommend(slots, uid, sess.lastBooks) || toolSearch(slots, q) || fallbackAnswer(uid, slots);
     case 'category': return toolCategory(slots);
+    case 'borrow': {
+      if (!uid) return { reply: '请先点右上角「登录」读者账号，登录后我就能直接帮你提交借阅申请啦～', books: [], intent: 'borrow', chips: ['怎么登录？'] };
+      const b = resolveActionBook(slots, sess);
+      if (!b) return { reply: '你想借哪一本呢？直接说书名（如「借《乡土中国》」），或在下面书单里挑一本说「就借这本」。', books: shapeAll(recommend(uid, 4)), intent: 'borrow', chips: ['推荐几本书', '热门榜'] };
+      const r = doBorrow(uid, b.id);
+      if (r.error) return { reply: r.error, books: [], intent: 'borrow', chips: ['查看我的借阅', '热门榜'] };
+      return {
+        reply: `已为你提交《${r.book.title}》的借阅申请 ✅\n流程：待馆员审批 → 到馆取书（借期 ${BORROW_DAYS} 天）。可在「我的借阅」查看进度。`,
+        books: [shape(r.book)], intent: 'borrow', chips: ['查看我的借阅', '再推荐几本']
+      };
+    }
+    case 'return_book': {
+      if (!uid) return { reply: '请先登录读者账号，我才能帮你还书。', books: [], intent: 'return_book', chips: ['怎么登录？'] };
+      const b = resolveActionBook(slots, sess);
+      if (!b) return { reply: '你想还哪一本？告诉我书名（如「还《乡土中国》」），或在「我的借阅」里点对应书的「归还」。', books: [], intent: 'return_book', chips: ['我的借阅', '推荐几本书'] };
+      const r = doReturn(uid, b.id);
+      if (r.error) return { reply: r.error, books: [], intent: 'return_book', chips: ['我的借阅', '热门榜'] };
+      return {
+        reply: `已帮你归还《${r.book.title}》✅${r.wasOverdue ? '（该书此前已逾期，记录已更新）' : ''}\n感谢及时归还～`,
+        books: [shape(r.book)], intent: 'return_book', chips: ['查看我的借阅', '再推荐几本']
+      };
+    }
     case 'rule': {
       const r = matchRule(q);
       if (r) return { reply: r.ans, books: [], intent: 'rule', chips: r.chips || CHIPS_DEFAULT.slice(0, 2) };
@@ -657,6 +724,15 @@ function offlineAnswer(q, slots, intent, uid, sess) {
   return fallbackAnswer(uid, slots);
 }
 
+// 动作类意图解析目标书：书名 → 上轮书单 → 指代（借/还上面那本）
+function resolveActionBook(slots, sess) {
+  if (slots.titles.length) { const b = findBook(slots.titles[0]); if (b) return b; }
+  if (slots.clean) { const b = findBook(slots.clean); if (b) return b; }
+  const lastId = (sess.lastBooks && sess.lastBooks.length) ? sess.lastBooks[sess.lastBooks.length - 1] : null;
+  if (lastId) { const b = db.prepare(`SELECT ${F} FROM books WHERE id=?`).get(lastId); if (b) return b; }
+  return null;
+}
+
 // ==========================================================
 // 七、主入口：离线优先 + LLM 工具增强
 // ==========================================================
@@ -668,6 +744,12 @@ async function answer(question, { uid } = {}) {
   const intent = detectIntent(q);
   const offline = offlineAnswer(q, slots, intent, uid, sess) || fallbackAnswer(uid, slots);
   offline.mode = 'rule';
+
+  // 动作类意图（借书/还书）确定性执行，不经 LLM，确保行为可预期
+  if (intent === 'borrow' || intent === 'return_book') {
+    remember(uid, q, offline, { pool: offline.pool, offset: offline.offset });
+    return offline;
+  }
 
   if (!llmEnabled()) { remember(uid, q, offline, { pool: offline.pool, offset: offline.offset }); return offline; }
 
