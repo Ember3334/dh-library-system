@@ -1,12 +1,17 @@
 {
   "name": "dh-platform",
-  "version": "2.0.0",
-  "description": "数文拾光 · 数字人文平台（宇宙首页 / 书库 / 摘星辰 / 资讯，本地管理 + 静态发布）",
+  "version": "2.1.0",
+  "description": "数文拾光 · 数字人文协会平台（宇宙首页 / 书库 / 摘星辰 / 资讯，本地管理 + 离线快照 + 静态发布）",
   "type": "commonjs",
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
-    "publish": "node scripts/export-static.js",
+    "dev": "node scripts/launch.js",
+    "works": "node scripts/scan-works.js",
+    "works:prune": "node scripts/scan-works.js --prune",
+    "posts": "node scripts/seed-posts.js",
+    "snapshot": "node scripts/build-snapshot.js",
+    "publish": "node scripts/build-snapshot.js && node scripts/export-static.js",
     "seed-test": "node scripts/seed-test.js"
   },
   "engines": {

@@ -1,5 +1,9 @@
 'use strict';
-// 应用核心：状态 / API 客户端 / 路由 / 导航 / 启动（数字人文平台版，无用户系统）
+// 应用核心：状态 / API 客户端 / 路由 / 导航 / 启动（数文拾光 · 数字人文平台 v2.1，无用户系统）
+// 三种运行形态：
+//   ① 本地完整版（node server/server.js，双击「启动平台.bat」）——全部功能
+//   ② 静态发布版（window.STATIC_MODE，公开 GET 走 data/*.json）——只读
+//   ③ 离线快照（file:// 双击 index.html，读 window.__SNAPSHOT__）——只读
 
 function colorFor(str) {
   let h = 0; for (let i = 0; i < (str || '?').length; i++) h = (h * 31 + str.charCodeAt(i)) % 360;
@@ -31,6 +35,12 @@ const COVER_THEMES = {
   'default': ['#7a5a3a', '#a87c45']
 };
 function esc(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+// 属性值转义（esc 不转引号，直接拼进属性会被闭合注入）
+function escAttr(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
 function wrapCJK(str, n) { const s = String(str || ''); const out = []; for (let i = 0; i < s.length; i += n) out.push(s.slice(i, i + n)); return out; }
 function coverArtSVG(book) {
   const cat = book.category || 'default';
@@ -58,28 +68,61 @@ function coverFallback(img) {
 }
 window.coverFallback = coverFallback;
 
-// 远程后端 / 静态模式配置
-// 本地模式：API_BASE 空（同域 localhost:3000），完整功能
-// 静态发布版：config.js 注入 window.STATIC_MODE=true，公开 GET 走本地 data/*.json
+// ==========================================================
+// 运行模式
+// ==========================================================
 window.API_BASE = window.API_BASE || '';
 window.STATIC_BASE = window.STATIC_BASE || window.API_BASE;
 window.STATIC_MODE = !!window.STATIC_MODE;
+// file:// 双击打开：无服务、无 fetch（CORS 拦），数据来自 snapshot.js
+window.OFFLINE = location.protocol === 'file:';
+const OFFLINE = window.OFFLINE;
+
 function apiUrl(path) { return window.API_BASE + path; }
-function coverUrl(callNo) {
-  // 静态发布版走相对路径（兼容 GitHub Pages 子路径）；本地版同域绝对路径
-  if (window.STATIC_MODE) return assetUrl('/covers/' + encodeURIComponent(callNo) + '.jpg');
-  return (window.STATIC_BASE || '') + '/covers/' + encodeURIComponent(callNo) + '.jpg';
-}
-// 静态模式下资源路径相对化（兼容 GitHub Pages 子路径）
 function assetUrl(p) {
-  if (!window.STATIC_MODE) return p;
-  return (window.ASSET_BASE || './') + String(p).replace(/^\//, '');
+  const s = String(p || '');
+  if (/^https?:\/\//i.test(s) || /^data:/i.test(s)) return s;
+  if (OFFLINE) return './' + s.replace(/^\//, '');
+  if (window.STATIC_MODE) return (window.ASSET_BASE || './') + s.replace(/^\//, '');
+  return s;
+}
+function encPath(p) {
+  return String(p || '').split('/').map(seg => encodeURIComponent(seg)).join('/');
+}
+// 作品/封面等载荷统一出口：站内相对路径逐段编码；外链原样（引号已剔除）
+function safePayload(p) {
+  const v = String(p || '').trim();
+  if (!v) return '';
+  if (/^https?:\/\//i.test(v)) return v.replace(/["'<>]/g, '');
+  if (v.startsWith('/')) return encPath(v);
+  return '';
+}
+function coverUrl(callNo) {
+  return assetUrl('/covers/' + encodeURIComponent(callNo) + '.jpg');
 }
 window.apiUrl = apiUrl;
-window.coverUrl = coverUrl;
 window.assetUrl = assetUrl;
+window.safePayload = safePayload;
 
-// 静态模式下的 GET 映射：/api/xxx → data/xxx.json
+// ==========================================================
+// 站点文案（settings）：启动时拉一次，渲染时读，缺失回落默认值
+// ==========================================================
+const Settings = {
+  data: {},
+  load(list) { if (list && typeof list === 'object') this.data = list; },
+  get(key, fallback) {
+    const v = this.data && this.data[key];
+    return (v === undefined || v === null || v === '') ? (fallback === undefined ? '' : fallback) : v;
+  },
+  list(key, fallbackArr) {
+    const v = this.get(key, '');
+    const arr = String(v || '').split(',').map(s => s.trim()).filter(Boolean);
+    return arr.length ? arr : (fallbackArr || []);
+  }
+};
+window.Settings = Settings;
+
+// 静态/离线模式下的 GET 映射：/api/xxx → data/xxx.json
 const STATIC_GET_MAP = {
   '/api/books': 'data/books.json',
   '/api/categories': 'data/categories.json',
@@ -87,7 +130,8 @@ const STATIC_GET_MAP = {
   '/api/overview': 'data/overview.json',
   '/api/works': 'data/works.json',
   '/api/posts': 'data/posts.json',
-  '/api/meta': 'data/meta.json'
+  '/api/meta': 'data/meta.json',
+  '/api/settings': 'data/settings.json'
 };
 
 const State = {
@@ -96,13 +140,54 @@ const State = {
   clearManage() { this.manageToken = ''; localStorage.removeItem('dh_manage_token'); }
 };
 
+// 离线快照直读（不发网络请求）
+function offlineGet(url, snap) {
+  const path = url.split('?')[0];
+  const qs = new URLSearchParams(url.split('?')[1] || '');
+  if (path === '/api/settings') return { settings: snap.settings || {} };
+  if (path === '/api/meta') return snap.meta || {};
+  if (path === '/api/overview') return snap.overview || {};
+  if (path === '/api/categories') return { categories: snap.categories || [] };
+  if (path === '/api/stars') return { stars: snap.stars || [] };
+  if (path === '/api/books') return filterStatic('/api/books', url, { books: snap.books || [] });
+  if (path.startsWith('/api/books/')) {
+    const id = path.split('/')[3];
+    const all = snap.books || [];
+    const item = all.find(b => String(b.id) === String(id));
+    if (!item) throw new Error('未找到该书');
+    return { book: item, related: all.filter(b => b.category === item.category && b.id !== item.id).slice(0, 6) };
+  }
+  if (path === '/api/works') return filterStatic('/api/works', url, { works: snap.works || [], issues: snap.issues || [] });
+  if (path.startsWith('/api/works/')) {
+    const id = path.split('/')[3];
+    const all = snap.works || [];
+    const item = all.find(w => String(w.id) === String(id));
+    if (!item) throw new Error('未找到该作品');
+    return { work: item, related: all.filter(w => w.id !== item.id && w.issue_no === item.issue_no).slice(0, 4) };
+  }
+  if (path === '/api/posts') return filterStatic('/api/posts', url, { posts: snap.posts || [] });
+  if (path.startsWith('/api/posts/')) {
+    const id = path.split('/')[3];
+    const item = (snap.posts || []).find(p => String(p.id) === String(id));
+    if (!item) throw new Error('未找到该资讯');
+    return { post: item };
+  }
+  if (path.startsWith('/api/ai/')) throw new Error('离线快照不含 AI 助手，请双击「启动平台.bat」使用完整版');
+  throw new Error('离线快照不支持该操作');
+}
+
 const API = {
   async req(method, url, body) {
-    // 静态模式：公开 GET 直接读本地 JSON
+    // ① 离线快照（file://）：只读，直接从内存取
+    if (OFFLINE) {
+      if (method !== 'GET') throw new Error('离线只读模式：编辑内容请双击「启动平台.bat」打开完整版');
+      if (!window.__SNAPSHOT__) throw new Error('缺少离线快照 data/snapshot.js，请先运行 npm run snapshot');
+      return offlineGet(url, window.__SNAPSHOT__);
+    }
+    // ② 静态发布版：公开 GET 读本地 JSON
     if (window.STATIC_MODE && method === 'GET') {
       const m = Object.keys(STATIC_GET_MAP).find(k => url === k || url.startsWith(k + '?'));
       if (m) {
-        // 带查询参数时先全量取回再前端过滤（静态版数据量小，可接受）
         const res = await fetch(assetUrl(STATIC_GET_MAP[m]));
         const data = await res.json();
         return filterStatic(m, url, data);
@@ -135,6 +220,7 @@ const API = {
       if (url.startsWith('/api/ai/')) { throw new Error('静态展示版不提供 AI 服务，请访问完整版'); }
       throw new Error('静态展示版不支持该操作');
     }
+    // ③ 正常后端
     const headers = {};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
     if (State.manageToken) headers['Authorization'] = 'Bearer ' + State.manageToken;
@@ -156,6 +242,7 @@ const API = {
   work(id) { return this.req('GET', '/api/works/' + id); },
   posts(p = {}) { const qs = new URLSearchParams(p).toString(); return this.req('GET', '/api/posts' + (qs ? '?' + qs : '')); },
   post(id) { return this.req('GET', '/api/posts/' + id); },
+  settings() { return this.req('GET', '/api/settings').then(r => r.settings || {}); },
   ask(q) { return this.req('POST', '/api/ai/ask', { question: q }); },
   aiStatus() { return this.req('GET', '/api/ai/status'); },
   aiReset() { return this.req('POST', '/api/ai/reset', {}); },
@@ -166,25 +253,41 @@ const API = {
   manageWorks() { return this.req('GET', '/api/manage/works'); },
   saveWork(id, b) { return id ? this.req('PUT', '/api/manage/works/' + id, b) : this.req('POST', '/api/manage/works', b); },
   deleteWork(id) { return this.req('DELETE', '/api/manage/works/' + id); },
+  rescanWorks(prune) { return this.req('POST', '/api/manage/works/rescan', { prune: !!prune }); },
   managePosts() { return this.req('GET', '/api/manage/posts'); },
   savePost(id, b) { return id ? this.req('PUT', '/api/manage/posts/' + id, b) : this.req('POST', '/api/manage/posts', b); },
   deletePost(id) { return this.req('DELETE', '/api/manage/posts/' + id); },
-  upload(file, kind) {
-    const fd = new FormData();
-    fd.append('file', file);
-    const headers = {};
-    if (State.manageToken) headers['Authorization'] = 'Bearer ' + State.manageToken;
-    return fetch(apiUrl('/api/manage/upload?kind=' + encodeURIComponent(kind || 'file')), { method: 'POST', headers, body: fd })
-      .then(async r => {
-        const d = await r.json().catch(() => ({}));
-        if (!r.ok) throw new Error(d.error || '上传失败');
-        return d;
-      });
+  manageSettings() { return this.req('GET', '/api/manage/settings'); },
+  saveSettings(patch) { return this.req('PUT', '/api/manage/settings', patch); },
+  fetchLink(url) { return this.req('POST', '/api/manage/fetch-link', { url }); },
+  mediaList() { return this.req('GET', '/api/manage/media'); },
+  deleteMedia(p, force) { return this.req('DELETE', '/api/manage/media?path=' + encodeURIComponent(p) + (force ? '&force=1' : '')); },
+  snapshot() { return this.req('POST', '/api/manage/snapshot', {}); },
+  // 上传走 XHR 以便显示进度
+  upload(file, kind, onProgress) {
+    return new Promise((resolve, reject) => {
+      const fd = new FormData();
+      fd.append('file', file);
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', apiUrl('/api/manage/upload?kind=' + encodeURIComponent(kind || 'file')));
+      if (State.manageToken) xhr.setRequestHeader('Authorization', 'Bearer ' + State.manageToken);
+      if (xhr.upload && onProgress) {
+        xhr.upload.onprogress = e => { if (e.lengthComputable) onProgress(Math.round(e.loaded / e.total * 100)); };
+      }
+      xhr.onload = () => {
+        let d = {};
+        try { d = JSON.parse(xhr.responseText); } catch (e) {}
+        if (xhr.status >= 200 && xhr.status < 300) resolve(d);
+        else reject(new Error(d.error || ('上传失败 (' + xhr.status + ')')));
+      };
+      xhr.onerror = () => reject(new Error('网络中断，上传失败'));
+      xhr.send(fd);
+    });
   },
   publish() { return this.req('POST', '/api/publish', {}); }
 };
 
-// 静态模式查询过滤（books 支持分页与检索；works/posts 支持 category/issue）
+// 静态/离线模式查询过滤（books 支持分页与检索；works/posts 支持 category/issue）
 function filterStatic(mapKey, url, data) {
   const qs = new URLSearchParams(url.split('?')[1] || '');
   if (mapKey === '/api/books') {
@@ -212,7 +315,7 @@ function filterStatic(mapKey, url, data) {
 }
 
 // 摘星辰星辰代号库
-const STAR_CODES = ['北极星', '启明星', '织女星', '天狼星', '牵牛星', '东壁星', '心宿星', '文曲星', '北斗星', '南斗星', '轩辕星', '长庚星'];
+const STAR_CODES = ['少微星', '东壁星', '北极星', '启明星', '织女星', '天狼星', '牵牛星', '心宿星', '文曲星', '北斗星', '南斗星', '轩辕星', '长庚星'];
 window.STAR_CODES = STAR_CODES;
 window.State = State;
 
@@ -226,25 +329,49 @@ function renderNav() {
     return `<a href="${h}" class="${isActive ? 'active' : ''}">${t}</a>`;
   }).join('')
     + `<button class="nav-theme" id="theme-btn" title="切换主题">🌙 深色</button>`
-    + `<button class="nav-ai" id="nav-ai" title="唤出 AI 助手">✨ AI 助手</button>`;
+    + (OFFLINE || window.STATIC_MODE ? '' : `<button class="nav-ai" id="nav-ai" title="唤出 AI 助手">✨ AI 助手</button>`);
   const themeBtn = document.getElementById('theme-btn');
   if (themeBtn) { themeBtn.onclick = toggleTheme; updateThemeBtn(); }
   const navAi = document.getElementById('nav-ai');
   if (navAi) navAi.onclick = () => { if (window.AIWidget) AIWidget.toggle(); };
-  if (userArea) userArea.innerHTML = window.STATIC_MODE ? '' : `<a class="manage-link" href="#/manage" title="创始人管理入口">·</a>`;
+  if (userArea) {
+    if (OFFLINE) userArea.innerHTML = `<span class="offline-badge" title="直接打开的本地文件，数据只读">📴 离线快照</span>`;
+    else if (window.STATIC_MODE) userArea.innerHTML = '';
+    else userArea.innerHTML = `<a class="manage-link" href="#/manage" title="创始人管理入口">·</a>`;
+  }
+}
+
+// 站点身份文案（品牌名/副标/浏览器标题）
+function applySiteText() {
+  const name = Settings.get('site.name', '数文拾光');
+  const full = Settings.get('site.nameFull', '数文拾光 · 数字人文协会');
+  const tag = Settings.get('site.tagline', '宇宙 · 书库 · 摘星辰 · 资讯');
+  const b = document.querySelector('.brand-text strong');
+  if (b) b.textContent = full;
+  const s = document.querySelector('.brand-text span');
+  if (s) s.textContent = tag;
+  document.title = name + ' · 数字人文平台';
+  const desc = Settings.get('site.description', '');
+  if (desc) {
+    let m = document.querySelector('meta[name="description"]');
+    if (!m) { m = document.createElement('meta'); m.name = 'description'; document.head.appendChild(m); }
+    m.content = desc;
+  }
 }
 
 function route() {
   renderNav();
+  applySiteText();
   const hash = location.hash || '#/home';
   const app = document.getElementById('app');
   app.scrollTop = 0;
   if (window._screenTimer) { clearInterval(window._screenTimer); window._screenTimer = null; }
   if (window.Views && Views.cleanupStars) Views.cleanupStars();
   if (window.Galaxy && Galaxy.destroy) Galaxy.destroy();
+  document.body.classList.remove('reader');   // 退出全屏阅读页时清掉布局态
   const run = async (fn) => {
     try { await fn(); }
-    catch (e) { app.innerHTML = `<div class="empty">加载失败：${e.message}<br><a href="#/home">返回首页</a></div>`; }
+    catch (e) { app.innerHTML = `<div class="empty">加载失败：${esc(e.message)}<br><a href="#/home">返回首页</a></div>`; }
     finally { paint(); }
   };
   function paint() {
@@ -277,9 +404,15 @@ function updateThemeBtn() {
 
 async function boot() {
   applyTheme();
+  // 先取文案，避免首屏闪默认值（失败也不阻塞）
+  try {
+    if (OFFLINE) Settings.load((window.__SNAPSHOT__ || {}).settings || {});
+    else Settings.load(await API.settings());
+  } catch (e) { /* 回落默认值 */ }
   renderNav();
-  // 静态版隐藏 AI 入口（无后端 AI 服务）
-  if (window.STATIC_MODE) {
+  applySiteText();
+  // 静态版/离线版隐藏 AI 入口（无后端 AI 服务）
+  if (window.STATIC_MODE || OFFLINE) {
     const fab = document.getElementById('ai-fab');
     if (fab) fab.style.display = 'none';
   } else {

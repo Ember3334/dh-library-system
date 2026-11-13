@@ -222,7 +222,8 @@ const GALAXY = (() => {
         const hit = this.pick();
         if (!hit) return;
         const u = hit.userData || {};
-        if (u.book) location.hash = '#/book/' + u.book.id;
+        // 门户只做版块导航：书库星点统一进书库首页（书库与摘星辰是两个独立版块，不交叉引用）
+        if (u.book) location.hash = '#/library';
         else if (u.work) location.hash = '#/work/' + u.work.id;
       });
       this._ro = new ResizeObserver(() => this.resize());

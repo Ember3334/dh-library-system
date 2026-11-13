@@ -1,114 +1,110 @@
 # 数文拾光 · 数字人文平台
 
-面向大学生的数字人文综合性展示平台：宇宙首页（3D 星系）· 书库 · 摘星辰 · 资讯 · AI 馆员。
-由创始人统一维护内容，访客免登录只读浏览；支持「本地完整版 + 一键发布纯静态版」双模式。
+贵州师范大学 **数文拾光 · 数字人文协会** 的综合展示平台：宇宙首页（3D 星系导航）/ 书库（学院真实馆藏）/ 摘星辰（协会可视化实践成果）/ 资讯 · 专业（数字人文动态与学习资源）。
 
-> 前身是「数字人文学院图书室 AI 智能管理系统」（v1 图书管理），v2.0 扩展为数字人文平台，
-> 696 本学院真实馆藏完整保留，借阅/用户体系按平台定位移除。
+无用户系统、无登录门槛——访客只读浏览；内容由创始人（协会）通过内置管理端统一维护。
 
-## 四大版块
+---
 
-| 版块 | 内容 |
+## 三种运行形态
+
+| 形态 | 怎么进入 | 能做什么 |
+|---|---|---|
+| **① 本地完整版** | 双击项目根目录 **`启动平台.bat`**（macOS/Linux 用 `start.sh`） | 全部功能：浏览 + 管理端（上传/编辑/发布） |
+| **② 离线快照** | 直接双击 `public/index.html` | 只读浏览全部内容（AI 与管理入口自动隐藏） |
+| **③ 静态发布版** | `npm run publish` 后把 `dist-static/` 托管出去 | 分享给同学的只读链接（GitHub Pages / Vercel 等） |
+
+> ① 的首次运行会自动 `npm install`（约 1—3 分钟，只做一次）。端口被占用时脚本会提示换端口（在 `.env` 加 `PORT=3001`）。
+
+## 目录速览
+
+```
+启动平台.bat            ← 双击我
+server/                 Node + Express + SQLite 后端
+  db.js                 数据表与种子（books / works / posts / settings）
+  works-scanner.js      作品目录扫描器
+  settings.js / defaults.js   站点文案（后台可改，defaults 是默认值）
+  validate.js           payload / 外链安全校验
+  snapshot.js           离线快照生成
+  publish.js            静态发布导出
+  ai.js                 AI 馆员（检索/荐书/导读，无借阅）
+public/
+  works/                ★ 摘星辰作品目录（放 HTML 就自动上架，见其 README.txt）
+  media/                上传的图片 / 视频 / 文件
+  covers/               书籍封面（<索书号>.jpg，缺图自动生成占位书封）
+  data/snapshot.js      离线快照（npm run snapshot 生成）
+dist-static/            静态发布产物（npm run publish 生成）
+data/library.db         SQLite 数据库（.bak-* 为备份）
+.env                    FOUNDER_PASSCODE（管理口令）/ TOKEN_SECRET / PORT
+```
+
+## 怎么加一件摘星辰作品
+
+**推荐做法（零后台操作）**：在 `public/works/` 下建一个目录
+
+```
+public/works/03-天狼星-我的作品/
+    index.html        ← 必须叫 index.html
+    work.json         ← 可选：{"code":"天狼星","issue_no":3,"summary":"…","members":"张三,李四"}
+    assets/           ← 图片等资源随便放
+```
+
+然后任选其一让平台感知：重启服务 / 管理端「↻ 重新扫描目录」/ 命令行 `npm run works`。
+不写 `work.json` 也能上架——标题、简介会自动从 HTML 的 `<title>` 与 `<meta name="description">` 提取；目录名按 `序号-代号-标题` 命名可自动识别期数与代号。单文件作品直接丢一个 `.html` 进 `public/works/` 也行。
+
+删除文件不会丢记录：扫描器只把对应条目标记为「缺失并隐藏」；确要清掉用 `npm run works:prune`。
+
+## 管理端（#/manage）
+
+入口：导航栏右侧的「·」（本地完整版可见）。口令在 `.env` 的 `FOUNDER_PASSCODE`。
+
+| Tab | 能做什么 |
 |---|---|
-| 🌌 宇宙首页 | Three.js 3D 星系：馆藏按分类组成四条旋臂，摘星辰作品是亮星（点击直达），资讯是入口卡；WebGL 不可用自动回退 2D Canvas 星空；实验性 WebXR VR 按钮 |
-| 📚 书库 | 696 本学院真实馆藏：检索 / 分类筛选 / 分页 / 详情 / AI 导读；封面按索书号 `/covers/<索书号>.jpg` 加载，缺图自动生成设计感书封 |
-| ✨ 摘星辰 | 数文拾光协会周期性可视化实践成果陈列：每件作品含星辰代号（北极星/启明星/织女星…）、期数、成员、简介；支持 交互HTML(iframe 沙箱)/图片/视频/外链 四种形态 |
-| 📰 资讯·专业 | 数字人文领域动态 / 时事 / 工具 / 学习资源，图文条目 + 「跳转浏览器原文」外链 |
+| ✨ 摘星辰作品 | 增删改、排序、期数/代号、运行方式（内嵌沙箱 / 仅新窗口）、重新扫描目录 |
+| 📰 资讯 | 增删改、分类、**粘贴原文链接一键抓取标题/摘要/来源** |
+| 🎛 站点文案 | 站点名、首页/书库/摘星辰/资讯的全部文案（留空即回落默认值） |
+| 🗂 媒体库 | 查看已上传文件、占用体积、被引用处数、删除 |
+| 🚀 发布 | 导出静态发布版 / 生成离线快照 |
 
-## 运行架构
+## 上传与安全约定
 
-- **本地完整版**（日常）：`npm start` → http://localhost:3000 。创始人凭口令进入 `#/manage` 管理端：
-  录入/编辑摘星辰作品与资讯、上传图片/视频/HTML 作品文件、一键发布静态版。
-- **静态发布版**（分享）：管理端点「发布」或 `npm run publish` → 产出 `dist-static/` 纯静态只读站点
-  （数据为 `data/*.json`，无后端、无管理入口、无 AI），整目录丢到 GitHub Pages / Vercel / 任意静态托管即可分享链接。
+- 图片 ≤ 8MB（jpg/png/webp/gif）· 视频 ≤ 200MB（mp4/webm/mov）· 其他 ≤ 50MB（pdf/zip/doc/docx/ppt/pptx/xls/xlsx/txt/md）
+- 上传会做扩展名 + MIME + 文件头魔数三重校验，改名伪装会被拒绝
+- **HTML 作品不走上传通道**：请放进 `public/works/`（阅读页以沙箱 iframe 运行，与站点隔离；需要 localStorage / 模块加载的作品在 `work.json` 里设 `"mode":"window"`）
+- 作品文件路径只允许 `/works/` 或 `/media/` 开头；资讯外链只允许 http/https
 
-## 快速开始
+## 资讯内容的真实性原则
 
-```bash
-cd "D:\workbuddyxiangmu\数字人文学院图书管理系统"
-npm install          # express + cors + better-sqlite3 + multer
-npm start            # http://localhost:3000
-```
+资讯条目要求「可查证」：每条必须带来源名称与原文链接；日期只写页面能确证的发布日期，查不到就留空并在正文注明「日期以原文为准」。批量入库脚本：`scripts/data/posts-2026.json` + `npm run posts`（按 source_url 幂等，`--force` 才覆盖）。
 
-### 创始人口令
-
-口令来自 `.env` 的 `FOUNDER_PASSCODE`（首次启动未配置会自动生成并写回 `.env`，控制台打印一次）。
-浏览器打开 `http://localhost:3000/#/manage`（入口是导航栏右侧的「·」）输入口令解锁。
-
-`.env` 示例（见 `.env.example`）：
-```ini
-FOUNDER_PASSCODE=你的口令
-TOKEN_SECRET=一串随机字符串
-# LLM_API_URL / LLM_API_KEY / LLM_MODEL  可选：接入真实大模型
-```
-
-### 发布静态版
+## 常用命令
 
 ```bash
-npm run publish      # 或管理端「发布静态版」按钮
-npx serve dist-static   # 本地预览；上线则把 dist-static/ 推到静态托管
+npm start              # 起服务（等价双击 启动平台.bat）
+npm run works          # 扫描作品目录（--prune 彻底删除缺失记录）
+npm run posts          # 资讯批量入库（--dry-run 试运行 / --force 覆盖）
+npm run snapshot       # 生成离线快照 public/data/snapshot.js
+npm run publish        # 离线快照 + 静态发布版 dist-static/
 ```
 
-## 目录结构
+## 数据备份
 
-```
-├─ server/
-│  ├─ server.js         # 入口与路由（公开只读 API + /api/manage/* + 上传 + /api/publish）
-│  ├─ db.js             # 建表（books/works/posts）与种子数据
-│  ├─ manage-auth.js    # 创始人单口令 → HMAC token（限速 5 次/分钟）
-│  ├─ publish.js        # 静态导出核心（拷贝 public + 注入 STATIC_MODE 配置 + data/*.json）
-│  ├─ ai.js             # AI 馆员智能体（检索/荐书/导读，无借阅）
-│  └─ crypto.js         # scrypt 哈希 + token 签名（零依赖）
-├─ public/
-│  ├─ index.html        # importmap(three) + 四版块 SPA
-│  ├─ js/galaxy.js      # 3D 星系（本地 vendor three r160，无 CDN 依赖）
-│  ├─ js/{app,views,charts,ai}.js
-│  ├─ vendor/           # three.module.min.js / OrbitControls / VRButton
-│  ├─ covers/           # 封面（按索书号命名：<索书号>.jpg）
-│  ├─ media/            # 管理端上传的作品/资讯文件
-│  └─ img/bg-dusk.jpg   # AI 生成的晨昏霞光页面背景
-├─ scripts/export-static.js  # CLI 发布
-├─ data/library.db      # SQLite（books 696 / works / posts）
-└─ docs/
-```
-
-## 内容管理（#/manage）
-
-- **摘星辰作品**：星辰代号 / 期数 / 标题 / 简介(支持 Markdown) / 成员 / 类型
-  （`html` 交互作品 iframe 沙箱嵌入 · `image` · `video` · `link` 外链）/ 封面 / 标签 / 排序 / 可见性。
-- **资讯**：分类（动态/时事/工具/学习资源）/ 标题 / 摘要 / 正文(Markdown) / 封面 / 来源名+原文链接。
-- **上传**：`POST /api/manage/upload?kind=img|video|file`（multer，白名单扩展名，存 `public/media/`）。
-- **发布**：`POST /api/publish` → `dist-static/`（含 publish-checkpoint.json 发布指纹）。
-
-## AI 馆员「小文」
-
-离线规则引擎跑满全部能力（零 API 零费用），配置 `LLM_API_URL + LLM_API_KEY` 后自动升级为工具增强大模型。
-
-| 能力 | 示例说法 |
-|---|---|
-| 检索 | 「有没有 Python 入门的书」「鲁迅有什么书」 |
-| 推荐 / 相似书 | 「推荐几本书」「跟《乡土中国》类似的书」 |
-| 位置 / 馆藏 | 「《乡土中国》在哪」 |
-| 导读 | 「介绍一下《乡土中国》」 |
-| 平台介绍 | 「摘星辰是什么」「平台有哪些版块」 |
-| 多轮追问 | 「换一批」「第 2 本」 |
+数据库在 `data/library.db`（WAL 模式）。改造或批量操作前先备份：
 
 ```bash
-node scripts/_ai_agent_test.js      # 22 组问法离线回归
-node scripts/_ai_llm_mock_test.js   # mock 大模型工具链路回归
-node scripts/_star_layout_test.js   # 2D 星空兜底渲染回归
+node -e "const db=require('better-sqlite3')('data/library.db');db.pragma('wal_checkpoint(TRUNCATE)');db.close()"
+cp data/library.db data/library.db.bak-$(date +%Y%m%d)
 ```
 
-## 书库数据维护
+## 回归测试
 
-- 重灌馆藏：删 `data/library.db*` → 重启（自动按 `data/seed-books.json` 种子重建）。
-- 增量导入：JSON 模板 `public/data/import-template.json`；索书号优先去重，其次 ISBN。
-- 封面：把 `<索书号>.jpg` 放进 `public/covers/`；命名规范见 `public/covers/README.txt`。
+```bash
+node scripts/_ai_agent_test.js       # AI 馆员 22 组问法
+node scripts/_ai_llm_mock_test.js    # LLM 工具链路与降级
+node scripts/_star_layout_test.js    # 星空布局
+node scripts/scan-works.js           # 作品目录扫描
+```
 
-## 技术要点
+## 技术栈
 
-- 原生 HTML/CSS/JS SPA（hash 路由），前端零框架；后端仅 4 个 npm 依赖。
-- 3D 星系：本地 vendor three.js r160 + OrbitControls；单 draw call 合并馆藏星点；手机端降粒子数；
-  `prefers-reduced-motion` 停自动旋转；WebXR 仅在浏览器支持沉浸式会话时出现 VR 按钮。
-- 静态发布版通过 `window.STATIC_MODE` 把 `/api/*` GET 映射到 `data/*.json`，路径全部相对化，兼容 GitHub Pages 子路径。
-- 主题：晨昏中间调（浅色=暖米纸+暮蓝星空 + AI 生成霞光纹理；深色=暖棕夜色），支持一键切换。
+Node.js 18+ · Express 4 · better-sqlite3(WAL) · 原生 HTML/CSS/JS SPA · Three.js r160（本地 vendor，3D 不可用时自动降级 2D Canvas 星空）· 零其他运行时依赖。

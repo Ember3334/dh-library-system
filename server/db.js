@@ -69,18 +69,37 @@ CREATE TABLE IF NOT EXISTS posts (
   visible      INTEGER NOT NULL DEFAULT 1
 );
 
+-- 站点可编辑文案（v2.1）：只存「覆盖值」，未设置的 key 由 server/defaults.js 提供默认值
+CREATE TABLE IF NOT EXISTS settings (
+  key        TEXT PRIMARY KEY,
+  value      TEXT NOT NULL DEFAULT '',
+  updated_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_books_title ON books(title);
 CREATE INDEX IF NOT EXISTS idx_books_cat ON books(category);
 CREATE INDEX IF NOT EXISTS idx_works_issue ON works(issue_no);
 CREATE INDEX IF NOT EXISTS idx_posts_cat ON posts(category);
 `);
 
-// ---------- 迁移：为旧库补列（兼容已存在的 books 表） ----------
+// ---------- 迁移：为旧库补列（兼容已存在的 books/works 表） ----------
 (function migrate() {
   const bcols = db.prepare("PRAGMA table_info(books)").all().map(c => c.name);
   if (!bcols.includes('call_no')) db.exec("ALTER TABLE books ADD COLUMN call_no TEXT");
   if (!bcols.includes('price')) db.exec("ALTER TABLE books ADD COLUMN price TEXT");
   db.exec("CREATE INDEX IF NOT EXISTS idx_books_callno ON books(call_no)");
+
+  // works v2.1：作品目录扫描器托管的元数据（全部可空，旧数据零影响）
+  const wcols = db.prepare("PRAGMA table_info(works)").all().map(c => c.name);
+  const addWork = (name, ddl) => { if (!wcols.includes(name)) db.exec('ALTER TABLE works ADD COLUMN ' + ddl); };
+  addWork('source_key', 'source_key TEXT');        // 归一化相对路径，扫描器幂等键
+  addWork('source_path', 'source_path TEXT');      // '/works/xxx/index.html'
+  addWork('source_mtime', 'source_mtime INTEGER'); // 文件 mtime，用于判断是否变更
+  addWork('auto', "auto INTEGER DEFAULT 0");       // 1 = 扫描器托管（可自动回写标题/简介）
+  addWork('source_state', "source_state TEXT DEFAULT 'ok'"); // ok | missing
+  addWork('mode', "mode TEXT DEFAULT 'embed'");    // embed = 内嵌沙箱 | window = 仅新窗口打开
+  // SQLite 唯一索引允许多个 NULL，故旧行（source_key 为空）不会冲突
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_works_source ON works(source_key)");
 })();
 
 // ---------- 种子数据 ----------
@@ -110,25 +129,23 @@ function seed() {
       console.log(`[seed] 已导入 ${books.length} 本真实馆藏（数字人文学院图书室）`);
     }
   }
-  seedWorks();
+  claimLegacyWorks();
   seedPosts();
 }
-
-// 摘星辰作品：仅录入真实成果（数据来自社团活动记录，不编造）
-function seedWorks() {
-  const cnt = db.prepare('SELECT COUNT(*) c FROM works').get();
-  if (cnt.c > 0) return;
-  const ins = db.prepare(`INSERT INTO works (code,issue_no,title,summary,members,type,payload,cover,tags,org,published_at,sort)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`);
-  const tx = db.transaction(() => {
-    // 第二期 · 东壁星：《九星照黔 · 贵州冬至民俗图谱》（社团真实产出）
-    ins.run('东壁星', 2, '九星照黔 · 贵州冬至民俗图谱',
-      '贵州九市州冬至民俗图谱：地图拼图闯关 + 六类民俗（地点/民族/食物/仪式/器物/寓意）放射图谱与全域网络图，浅色宣纸国风、单文件零依赖。数据来自项目组两份民俗田野笔记与公开报道整理。',
-      '摘星辰第二期项目组', 'link', '', '', '贵州,民俗,可视化,国风',
-      '数文拾光协会', '2026-11-13', 20);
-  });
-  tx();
-  console.log('[seed] 已录入摘星辰作品示例（可在 #/manage 编辑或删除）');
+// 摘星辰作品：
+// v2.1 起作品条目由 server/works-scanner.js 从 public/works/ 目录自动生成。
+// 这里只做一件事——把 v2.0 遗留的那条「九星照黔」占位记录认领到作品目录，
+// 避免扫描器再插一条造成重复（认领不动 title/summary/members 等内容字段）。
+function claimLegacyWorks() {
+  const legacy = db.prepare(
+    "SELECT id FROM works WHERE (source_key IS NULL OR source_key='') AND title LIKE '%九星照黔%' LIMIT 1"
+  ).get();
+  if (!legacy) return;
+  const rel = 'works/02-东壁星-九星照黔/index.html';
+  db.prepare(`UPDATE works SET type='html', payload=?, source_key=?, source_path=?,
+      auto=0, source_state='ok', mode='embed'
+    WHERE id=?`).run('/' + rel, rel, '/' + rel, legacy.id);
+  console.log('[seed] 已认领遗留作品记录「九星照黔」→ ' + rel);
 }
 
 // 资讯种子：收录真实可查的平台/计划信息

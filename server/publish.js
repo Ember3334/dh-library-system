@@ -8,12 +8,14 @@
 const path = require('path');
 const fs = require('fs');
 const db = require('./db');
+const settings = require('./settings');
 
 const ROOT = path.join(__dirname, '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const DIST_DIR = path.join(ROOT, 'dist-static');
 const DATA_DIR = path.join(DIST_DIR, 'data');
 const COPIED_IGNORE = new Set(['config.js']); // config.js 由注入版替代
+const MAX_MEDIA_COPY_MB = 300;                // 单次发布会话内媒体拷贝上限，超出只记录不中断
 
 function ensureDir(p) { fs.mkdirSync(p, { recursive: true }); }
 
@@ -22,6 +24,7 @@ function copyDir(src, dest) {
   ensureDir(dest);
   for (const name of fs.readdirSync(src)) {
     if (COPIED_IGNORE.has(name)) continue;
+    if (name === 'snapshot.js' && path.basename(src) === 'data') continue; // 静态版用 data/*.json，不重复带离线快照
     const s = path.join(src, name), d = path.join(dest, name);
     const st = fs.statSync(s);
     if (st.isDirectory()) { const r = copyDir(s, d); files += r.files; bytes += r.bytes; }
@@ -31,6 +34,16 @@ function copyDir(src, dest) {
 }
 
 function rmDir(p) { fs.rmSync(p, { recursive: true, force: true }); }
+
+function countFiles(p) {
+  let n = 0;
+  if (!fs.existsSync(p)) return 0;
+  for (const name of fs.readdirSync(p)) {
+    const f = path.join(p, name);
+    n += fs.statSync(f).isDirectory() ? countFiles(f) : 1;
+  }
+  return n;
+}
 
 function dirSize(p) {
   let bytes = 0;
@@ -77,7 +90,9 @@ function exportData() {
     postsCount: posts.length,
     categories: db.prepare("SELECT category, COUNT(*) c FROM books WHERE category IS NOT NULL AND category<>'' GROUP BY category ORDER BY c DESC").all()
   });
-  write('meta.json', { totalBooks: books.length, worksCount: works.length, postsCount: posts.length, version: '2.0.0-dh-platform' });
+  write('meta.json', { totalBooks: books.length, worksCount: works.length, postsCount: posts.length, version: '2.1.0-dh-platform' });
+  // v2.1：站点文案随发布走，静态版不再吃前端硬编码默认值
+  write('settings.json', { settings: settings.mergedSettings() });
   return { books: books.length, works: works.length, posts: posts.length };
 }
 
@@ -102,10 +117,22 @@ async function exportStatic() {
   writeStaticConfig();
   const counts = exportData();
 
-  // 2) checkpoint
+  // 2) 媒体体积统计（超过上限只提示，不中断发布）
+  const mediaDir = path.join(DIST_DIR, 'media');
+  const mediaBytes = dirSize(mediaDir);
+  const skippedMedia = [];
+  if (mediaBytes > MAX_MEDIA_COPY_MB * 1024 * 1024) {
+    skippedMedia.push(`/media/ 合计 ${(mediaBytes / 1024 / 1024).toFixed(1)}MB，超过 ${MAX_MEDIA_COPY_MB}MB 建议上限（已照常导出，但托管平台可能有单仓体积限制）`);
+  }
+
+  // 3) checkpoint
   const stat = {
     publishedAt: new Date().toISOString(),
+    dir: 'dist-static/',
     files: copied.files,
+    mediaFiles: fs.existsSync(mediaDir) ? countFiles(mediaDir) : 0,
+    mediaMB: +(mediaBytes / 1024 / 1024).toFixed(2),
+    skippedMedia,
     dataBytes: dirSize(DATA_DIR),
     totalBytes: dirSize(DIST_DIR),
     ...counts,

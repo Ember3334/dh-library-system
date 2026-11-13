@@ -289,7 +289,7 @@ const Views = (() => {
       this.canvas.addEventListener('click', e => {
         const rect = this.canvas.getBoundingClientRect();
         const n = this.pick(e.clientX - rect.left, e.clientY - rect.top);
-        if (n && n.book) location.hash = '#/book/' + n.id;
+        if (n && n.book) location.hash = '#/library';   // 门户只做版块导航
       });
     }
     setHover(n) {
@@ -424,27 +424,69 @@ const Views = (() => {
   function starBadgeEl(code) { const d = document.createElement('div'); d.className = 'work-badge'; d.innerHTML = starBadge(code || ''); return d; }
   window.starBadgeEl = starBadgeEl;
 
-  // 简易 Markdown 渲染（标题/粗体/斜体/列表/链接/段落）
+  // 简易 Markdown 渲染（标题/粗体/斜体/行内代码/列表/引用/代码块/表格/链接/图片）
+  // 只做资讯与简介够用的子集；所有输入先转义，链接仅放行 http(s)
   function mdRender(text) {
     const escMd = s => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const inline = s => escMd(s)
+      .replace(/!\[([^\]]*)\]\((https?:[^)\s]+)\)/g, '<img src="$2" alt="$1" style="max-width:100%;border-radius:10px;margin:6px 0">')
+      .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
+      .replace(/\*([^*]+)\*/g, '<i>$1</i>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
     const lines = String(text || '').split('\n');
-    let html = '', inList = false;
-    const closeList = () => { if (inList) { html += '</ul>'; inList = false; } };
+    let html = '', inUl = false, inOl = false, inCode = false, tableBuf = [];
+    const closeList = () => {
+      if (inUl) { html += '</ul>'; inUl = false; }
+      if (inOl) { html += '</ol>'; inOl = false; }
+    };
+    const flushTable = () => {
+      if (!tableBuf.length) return;
+      const rows = tableBuf.map(r => r.split('|').slice(1, -1).map(c => c.trim()));
+      const body = rows.filter(r => !r.every(c => /^:?-{2,}:?$/.test(c)));
+      if (body.length) {
+        const head = body[0], rest = body.slice(1);
+        html += '<table class="md-table"><thead><tr>' + head.map(c => `<th>${inline(c)}</th>`).join('') + '</tr></thead><tbody>'
+          + rest.map(r => '<tr>' + r.map(c => `<td>${inline(c)}</td>`).join('') + '</tr>').join('')
+          + '</tbody></table>';
+      }
+      tableBuf = [];
+    };
     for (const raw of lines) {
-      let line = raw;
-      const inline = s => escMd(s)
-        .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
-        .replace(/\*([^*]+)\*/g, '<i>$1</i>')
-        .replace(/`([^`]+)`/g, '<code>$1</code>')
-        .replace(/\[([^\]]+)\]\((https?:[^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
-      const hm = line.match(/^(#{1,4})\s+(.*)/);
-      if (hm) { closeList(); html += `<h${hm[1].length + 1}>${inline(hm[2])}</h${hm[1].length + 1}>`; continue; }
-      const lm = line.match(/^\s*[-*]\s+(.*)/);
-      if (lm) { if (!inList) { html += '<ul>'; inList = true; } html += `<li>${inline(lm[1])}</li>`; continue; }
+      const line = raw;
+      // 代码块
+      if (/^```/.test(line.trim())) {
+        closeList(); flushTable();
+        html += inCode ? '</code></pre>' : '<pre class="md-pre"><code>';
+        inCode = !inCode; continue;
+      }
+      if (inCode) { html += escMd(raw) + '\n'; continue; }
+      // 表格行
+      if (/^\s*\|.*\|\s*$/.test(line)) { closeList(); tableBuf.push(line.trim()); continue; }
+      flushTable();
+      const hm = line.match(/^(#{1,5})\s+(.*)/);
+      if (hm) { closeList(); const lv = Math.min(6, hm[1].length + 1); html += `<h${lv}>${inline(hm[2])}</h${lv}>`; continue; }
+      if (/^\s*(---|\*\*\*|___)\s*$/.test(line)) { closeList(); html += '<hr class="md-hr">'; continue; }
+      const olm = line.match(/^\s*(\d+)\.\s+(.*)/);
+      if (olm) {
+        if (inUl) { html += '</ul>'; inUl = false; }
+        if (!inOl) { html += '<ol>'; inOl = true; }
+        html += `<li>${inline(olm[2])}</li>`; continue;
+      }
+      const ulm = line.match(/^\s*[-*+]\s+(.*)/);
+      if (ulm) {
+        if (inOl) { html += '</ol>'; inOl = false; }
+        if (!inUl) { html += '<ul>'; inUl = true; }
+        html += `<li>${inline(ulm[1])}</li>`; continue;
+      }
+      const qm = line.match(/^\s*>\s?(.*)/);
+      if (qm) { closeList(); html += `<blockquote>${inline(qm[1])}</blockquote>`; continue; }
       closeList();
       if (line.trim() === '') { html += '<div class="md-gap"></div>'; continue; }
       html += `<p>${inline(line)}</p>`;
     }
+    if (inCode) html += '</code></pre>';
+    flushTable();
     closeList();
     return html;
   }
@@ -457,12 +499,13 @@ const Views = (() => {
   let starScene = null;
   async function home() {
     const [cats, ov] = await Promise.all([API.categories().catch(() => []), API.overview().catch(() => ({}))]);
+    const S = k => Settings.get(k, '');
     app().innerHTML = `
       <section class="hero">
-        <h1>数文拾光 <span class="g">数字人文宇宙</span></h1>
-        <p>馆藏是星 · 作品是行星 · 资讯是星轨 —— 拖动旋转星系，点击星球进入版块</p>
+        <h1>${esc(S('home.h1'))} <span class="g">${esc(S('home.h1Accent'))}</span></h1>
+        <p>${esc(S('home.sub'))}</p>
         <div class="search-row">
-          <input id="q" placeholder="搜索馆藏书名 / 作者 / 标签…" value="">
+          <input id="q" placeholder="${escAttr(S('home.searchPlaceholder'))}" value="">
           <button class="btn" id="s-btn">检索书库</button>
         </div>
       </section>
@@ -472,8 +515,8 @@ const Views = (() => {
       <div class="galaxy-wrap" id="galaxy-wrap">
         <div class="star-head">
           <div>
-            <div class="star-title">🌌 数字人文宇宙</div>
-            <div class="star-sub">书库旋臂 · 摘星辰行星 · 资讯星轨 · 点击星球直达</div>
+            <div class="star-title">${esc(S('home.galaxyTitle'))}</div>
+            <div class="star-sub">${esc(S('home.galaxySub'))}</div>
           </div>
           <span class="star-count" id="star-count">—</span>
         </div>
@@ -484,9 +527,9 @@ const Views = (() => {
         <div class="star-loader" id="star-loader"><span></span><span></span><span></span></div>
       </div>
       <section class="portal-grid" id="portal-grid">
-        <a class="portal" href="#/library"><div class="p-icon">📚</div><b>书库</b><span>${ov.totalBooks || '—'} 本学院真实馆藏 · 检索与详情</span></a>
-        <a class="portal" href="#/stars"><div class="p-icon">✨</div><b>摘星辰</b><span>${ov.worksCount || '—'} 件可视化作品 · ${ov.issues || '—'} 期实践</span></a>
-        <a class="portal" href="#/news"><div class="p-icon">📰</div><b>资讯 · 专业</b><span>${ov.postsCount || '—'} 条动态 · 工具与学习资源</span></a>
+        <a class="portal" href="#/library"><div class="p-icon">📚</div><b>${esc(S('home.portal1Title'))}</b><span>${ov.totalBooks || '—'} 本 · ${esc(S('home.portal1Desc'))}</span></a>
+        <a class="portal" href="#/stars"><div class="p-icon">✨</div><b>${esc(S('home.portal2Title'))}</b><span>${ov.worksCount || '—'} 件作品 · ${ov.issues || '—'} 期 · ${esc(S('home.portal2Desc'))}</span></a>
+        <a class="portal" href="#/news"><div class="p-icon">📰</div><b>${esc(S('home.portal3Title'))}</b><span>${ov.postsCount || '—'} 条 · ${esc(S('home.portal3Desc'))}</span></a>
       </section>`;
     const q = $('#q');
     const doSearch = () => { location.hash = '#/library' + (q.value.trim() ? ('?q=' + encodeURIComponent(q.value.trim())) : ''); };
@@ -539,10 +582,10 @@ const Views = (() => {
     if (hm && hm[1]) { libState.q = decodeURIComponent(hm[1]); location.hash = '#/library'; }
     app().innerHTML = `
       <section class="hero">
-        <h1>📚 <span class="g">书库</span></h1>
-        <p>数字人文学院图书室真实馆藏 · 每本书都可查看详情与 AI 导读</p>
+        <h1>📚 <span class="g">${esc(Settings.get('library.h1', '书库'))}</span></h1>
+        <p>${esc(Settings.get('library.sub', ''))}</p>
         <div class="search-row">
-          <input id="q" placeholder="搜索书名 / 作者 / 标签 / 索书号…" value="${esc(libState.q)}">
+          <input id="q" placeholder="${escAttr(Settings.get('library.searchPlaceholder', ''))}" value="${esc(libState.q)}">
           <button class="btn" id="s-btn">搜索</button>
         </div>
         <div class="chips" id="chips"><span class="chip ${!libState.cat ? 'active' : ''}" data-cat="">全部</span></div>
@@ -630,16 +673,18 @@ const Views = (() => {
   async function starsView() {
     app().innerHTML = `
       <section class="hero">
-        <h1>✨ <span class="g">摘星辰</span></h1>
-        <p>危楼高百尺，手可摘星辰 —— 数文拾光协会周期性可视化实践计划，每期成果皆有一颗专属星辰</p>
+        <h1>✨ <span class="g">${esc(Settings.get('works.h1', '摘星辰'))}</span></h1>
+        <p>${esc(Settings.get('works.sub', ''))}</p>
+        ${(window.OFFLINE || window.STATIC_MODE) ? '' :
+          `<div class="stars-hint">作品文件放在 <code>public/works/</code> 下 · 启动时自动上架 · 也可在管理端点「重新扫描」</div>`}
       </section>
       <div id="stars-body"><div class="empty"><span class="spin"></span> 加载中…</div></div>`;
     const r = await API.works({});
     const works = r.works || [];
-    const issues = r.issues || [];
     const body = $('#stars-body');
     if (!works.length) {
-      body.innerHTML = '<div class="empty" style="padding:40px">第一期成果整理中，敬请期待 ✨<br><span class="muted">摘星辰计划：2026.10.26 — 12.12，每周一期</span></div>';
+      body.innerHTML = `<div class="empty" style="padding:40px">${esc(Settings.get('works.emptyTitle', '成果整理中，敬请期待 ✨'))}
+        <br><span class="muted">${esc(Settings.get('works.emptyHint', ''))}</span></div>`;
       return;
     }
     const byIssue = new Map();
@@ -649,6 +694,7 @@ const Views = (() => {
         <div class="issue-head">
           <div class="issue-no">第 ${issue} 期</div>
           <div class="issue-line"></div>
+          <span class="issue-count muted">${list.length} 件作品</span>
         </div>
         <div class="work-grid">
           ${list.map(w => `
@@ -662,27 +708,98 @@ const Views = (() => {
                   ${w.members ? `<span>👥 ${esc(w.members)}</span>` : ''}
                   <span>${fmtDate(w.published_at)}</span>
                 </div>
+                <div class="work-actions">
+                  <span class="work-enter">▶ 打开作品</span>
+                  ${w.type === 'html' && w.payload ? `<a class="work-ext" data-ext="${escAttr(w.payload)}" title="在新标签页打开原文件">新窗口 ↗</a>` : ''}
+                </div>
               </div>
             </div>`).join('')}
         </div>
       </div>`).join('');
-    $$('.work-card').forEach(c => c.onclick = () => location.hash = '#/work/' + c.dataset.id);
+    $$('.work-card').forEach(c => c.onclick = (e) => {
+      if (e.target.closest('.work-ext')) return;
+      location.hash = '#/work/' + c.dataset.id;
+    });
+    $$('.work-ext').forEach(a => a.onclick = (e) => {
+      e.stopPropagation();
+      const p = safePayload(a.dataset.ext);
+      if (p) window.open(assetUrl(p), '_blank', 'noopener');
+    });
   }
 
+  // 作品阅读页：全屏 iframe + 固定顶栏
   async function workDetail(id) {
     const r = await API.work(id);
     const w = r.work;
     const TYPE_LABEL = { html: '交互作品', image: '图像作品', video: '视频作品', link: '外部链接' };
+    const payload = safePayload(w.payload);
+    const src = payload ? assetUrl(payload) : '';
+    const isReader = w.type === 'html' && payload && (w.mode || 'embed') !== 'window';
+
+    // 全屏布局：顶栏固定 56px，iframe 占满剩余
+    document.body.classList.toggle('reader', !!isReader);
+
+    if (isReader) {
+      app().innerHTML = `
+        <div class="reader-bar">
+          <a class="reader-back" href="#/stars" title="返回摘星辰">←</a>
+          <div class="reader-title">
+            <b>${esc(w.title)}</b>
+            <span class="reader-meta">
+              <span class="star-chip" style="--cc:${CODE_COLORS[w.code] || CODE_COLORS.default}">${esc(w.code || '未命名星')}</span>
+              第 ${w.issue_no} 期 · ${esc(TYPE_LABEL[w.type] || w.type)}
+            </span>
+          </div>
+          <div class="reader-actions">
+            <button class="btn ghost sm" id="reader-info">简介</button>
+            <button class="btn ghost sm" id="reader-copy">复制链接</button>
+            <a class="btn sm" href="${escAttr(src)}" target="_blank" rel="noopener noreferrer">新窗口打开 ↗</a>
+          </div>
+        </div>
+        <div class="reader-stage">
+          <iframe class="reader-frame" src="${escAttr(src)}"
+            sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads"
+            allow="fullscreen; autoplay; clipboard-read; clipboard-write"
+            title="${escAttr(w.title)}"></iframe>
+          <div class="reader-drawer" id="reader-drawer">
+            <div class="reader-drawer-head">
+              <b>作品简介</b><button class="btn ghost sm" id="reader-drawer-close">收起</button>
+            </div>
+            <div class="reader-drawer-body">
+              ${w.members ? `<div class="muted" style="font-size:12px;margin-bottom:8px">成员：${esc(w.members)}</div>` : ''}
+              ${w.tags ? `<div class="tagrow" style="margin-bottom:10px">${w.tags.split(',').filter(Boolean).map(t => `<span class="tag">${esc(t)}</span>`).join('')}</div>` : ''}
+              <div class="work-summary-full">${mdRender(w.summary || '暂无简介')}</div>
+              <p class="muted" style="font-size:12px">${esc(Settings.get('works.sandboxHint', ''))}</p>
+            </div>
+          </div>
+        </div>`;
+      const drawer = $('#reader-drawer');
+      $('#reader-info').onclick = () => drawer.classList.toggle('on');
+      $('#reader-drawer-close').onclick = () => drawer.classList.remove('on');
+      $('#reader-copy').onclick = async () => {
+        const url = location.href;
+        try { await navigator.clipboard.writeText(url); toast('链接已复制', 'ok'); }
+        catch (e) { openModal(`<h3>作品链接</h3><div class="form"><input value="${escAttr(url)}" readonly onclick="this.select()"></div>`); }
+      };
+      return;
+    }
+
+    // 非 html / window 模式：卡片式详情
     let body = '';
-    if (w.type === 'html' && w.payload) {
-      body = `<div class="work-frame-wrap"><iframe class="work-frame" src="${assetUrl(w.payload)}" sandbox="allow-scripts allow-popups" loading="lazy" title="${esc(w.title)}"></iframe></div>
-        <p class="muted" style="font-size:12px;margin-top:8px">交互作品以沙箱模式嵌入运行 · 如无法交互可<a href="${assetUrl(w.payload)}" target="_blank" rel="noopener noreferrer">在新窗口打开</a></p>`;
-    } else if (w.type === 'image' && w.payload) {
-      body = `<div class="work-image"><img src="${assetUrl(w.payload)}" alt="${esc(w.title)}"></div>`;
-    } else if (w.type === 'video' && w.payload) {
-      body = `<div class="work-video"><video src="${assetUrl(w.payload)}" controls playsinline preload="metadata"></video></div>`;
-    } else if (w.type === 'link' && w.payload) {
-      body = `<div class="work-link-card"><p>本作品托管在外部平台</p><a class="btn" href="${esc(w.payload)}" target="_blank" rel="noopener noreferrer">🔗 打开作品</a></div>`;
+    if (w.type === 'html' && payload) {
+      body = `<div class="work-link-card">
+          <p>该作品需在独立窗口运行（用到本地存储或模块化加载，内嵌会受限）</p>
+          <a class="btn" href="${escAttr(src)}" target="_blank" rel="noopener noreferrer">▶ 在新窗口打开作品</a>
+        </div>`;
+    } else if (w.type === 'image' && payload) {
+      body = `<div class="work-image"><img src="${escAttr(src)}" alt="${escAttr(w.title)}"></div>`;
+    } else if (w.type === 'video' && payload) {
+      body = `<div class="work-video"><video src="${escAttr(src)}" controls playsinline preload="metadata"></video></div>`;
+    } else if (w.type === 'link' && payload) {
+      const u = /^https?:\/\//i.test(w.payload) ? w.payload : '';
+      body = u
+        ? `<div class="work-link-card"><p>本作品托管在外部平台</p><a class="btn" href="${escAttr(u)}" target="_blank" rel="noopener noreferrer">🔗 打开作品</a></div>`
+        : `<div class="work-link-card"><p class="muted">作品链接待补充</p></div>`;
     } else {
       body = `<div class="work-link-card"><p class="muted">作品文件整理中</p></div>`;
     }
@@ -695,7 +812,7 @@ const Views = (() => {
             <h1>${esc(w.title)}</h1>
             <div class="work-detail-meta">
               <span class="star-chip" style="--cc:${CODE_COLORS[w.code] || CODE_COLORS.default}">${esc(w.code || '未命名星')}</span>
-              <span class="status">${TYPE_LABEL[w.type] || w.type}</span>
+              <span class="status">${esc(TYPE_LABEL[w.type] || w.type)}</span>
               <span class="muted">第 ${w.issue_no} 期 · ${esc(w.org || '')}</span>
               ${w.members ? `<span class="muted">成员：${esc(w.members)}</span>` : ''}
             </div>
@@ -720,12 +837,13 @@ const Views = (() => {
   async function news() {
     app().innerHTML = `
       <section class="hero">
-        <h1>📰 <span class="g">资讯 · 专业</span></h1>
-        <p>数字人文领域动态 · 前沿时事 · 实用工具 · 学习资源</p>
+        <h1>📰 <span class="g">${esc(Settings.get('news.h1', '资讯 · 专业'))}</span></h1>
+        <p>${esc(Settings.get('news.sub', ''))}</p>
         <div class="chips" id="news-chips">
-          ${['', '动态', '时事', '工具', '学习资源'].map(c =>
-            `<span class="chip ${newsCat === c ? 'active' : ''}" data-cat="${c}">${c || '全部'}</span>`).join('')}
+          ${[''].concat(Settings.list('news.categories', ['动态', '时事', '项目与赛事', '工具', '学习资源'])).map(c =>
+            `<span class="chip ${newsCat === c ? 'active' : ''}" data-cat="${escAttr(c)}">${esc(c || '全部')}</span>`).join('')}
         </div>
+        <div class="stars-hint">${esc(Settings.get('news.sourceHint', ''))}</div>
       </section>
       <div id="news-list" class="news-list"><div class="empty"><span class="spin"></span> 加载中…</div></div>`;
     $('#news-chips').addEventListener('click', e => {
@@ -755,6 +873,7 @@ const Views = (() => {
   async function postDetail(id) {
     const r = await API.post(id);
     const p = r.post;
+    const srcUrl = /^https?:\/\//i.test(p.source_url || '') ? p.source_url : '';
     app().innerHTML = `
       <a class="btn ghost sm" href="#/news">← 返回资讯</a>
       <article class="post-detail" style="margin-top:14px">
@@ -764,9 +883,10 @@ const Views = (() => {
           ${p.source_name ? `<span class="muted">来源：${esc(p.source_name)}</span>` : ''}
         </div>
         <h1>${esc(p.title)}</h1>
-        ${p.cover ? `<div class="post-cover"><img src="${assetUrl(p.cover)}" alt=""></div>` : ''}
+        ${p.cover ? `<div class="post-cover"><img src="${escAttr(safePayload(p.cover))}" alt=""></div>` : ''}
         <div class="post-content">${mdRender(p.content || p.summary || '')}</div>
-        ${p.source_url ? `<div class="post-src"><a class="btn" href="${esc(p.source_url)}" target="_blank" rel="noopener noreferrer">🔗 跳转浏览器查看原文${p.source_name ? '（' + esc(p.source_name) + '）' : ''}</a></div>` : ''}
+        ${srcUrl ? `<div class="post-src"><a class="btn" href="${escAttr(srcUrl)}" target="_blank" rel="noopener noreferrer">🔗 跳转浏览器查看原文${p.source_name ? '（' + esc(p.source_name) + '）' : ''}</a>
+          <div class="muted" style="font-size:11px;margin-top:8px;word-break:break-all">${esc(srcUrl)}</div></div>` : ''}
       </article>`;
   }
 
@@ -774,6 +894,13 @@ const Views = (() => {
   // 八、管理端（创始人）
   // ==========================================================
   async function manage() {
+    if (window.OFFLINE) {
+      app().innerHTML = `<div class="card" style="max-width:460px;margin:40px auto;text-align:center">
+        <h3 style="margin-bottom:6px">📴 离线只读</h3>
+        <p class="muted" style="font-size:13px">你是直接双击打开的页面，只能浏览。要编辑内容请双击项目根目录的 <code>启动平台.bat</code>。</p>
+      </div>`;
+      return;
+    }
     if (window.STATIC_MODE) {
       app().innerHTML = `<div class="card" style="max-width:460px;margin:40px auto;text-align:center">
         <h3 style="margin-bottom:6px">🔒 静态展示版</h3>
@@ -815,13 +942,17 @@ const Views = (() => {
       <div class="tabs">
         <span class="tab active" data-t="works">✨ 摘星辰作品</span>
         <span class="tab" data-t="posts">📰 资讯</span>
-        <span class="tab" data-t="publish">🚀 发布静态版</span>
+        <span class="tab" data-t="settings">🎛 站点文案</span>
+        <span class="tab" data-t="media">🗂 媒体库</span>
+        <span class="tab" data-t="publish">🚀 发布</span>
       </div>
       <div id="manage-body"><div class="empty"><span class="spin"></span> 加载中…</div></div>`;
     $('#logout-manage').onclick = () => { State.clearManage(); toast('已退出管理端', 'ok'); location.hash = '#/home'; };
     const render = (t) => {
       if (t === 'works') return manageWorksPanel();
       if (t === 'posts') return managePostsPanel();
+      if (t === 'settings') return manageSettingsPanel();
+      if (t === 'media') return manageMediaPanel();
       if (t === 'publish') return managePublishPanel();
     };
     $$('#app .tab').forEach(el => el.onclick = () => {
@@ -838,61 +969,86 @@ const Views = (() => {
     const r = await API.manageWorks();
     const works = r.works || [];
     body.innerHTML = `
-      <div style="display:flex;justify-content:space-between;align-items:center;margin:6px 0 14px">
-        <span class="muted" style="font-size:13px">共 ${works.length} 件作品</span>
-        <button class="btn" id="add-work">+ 新增作品</button>
+      <div class="manage-bar">
+        <span class="muted" style="font-size:13px">共 ${works.length} 件作品 · 目录扫描 ${works.filter(w => w.auto).length} 件</span>
+        <div style="display:flex;gap:8px">
+          <button class="btn ghost sm" id="rescan-works" title="扫描 public/works/ 下新增或改动的 HTML">↻ 重新扫描目录</button>
+          <button class="btn" id="add-work">+ 新增作品</button>
+        </div>
       </div>
       <div class="card" style="padding:0;overflow:auto"><table>
-        <thead><tr><th>期</th><th>代号</th><th>标题</th><th>类型</th><th>状态</th><th>操作</th></tr></thead>
+        <thead><tr><th>期</th><th>代号</th><th>标题</th><th>类型</th><th>来源</th><th>状态</th><th>操作</th></tr></thead>
         <tbody>${works.map(w => `<tr>
           <td>第${w.issue_no}期</td>
           <td>${esc(w.code || '—')}</td>
-          <td>${esc(w.title)}</td>
-          <td>${w.type}</td>
-          <td>${w.visible ? '✅ 展示中' : '🚫 隐藏'}</td>
+          <td>${esc(w.title)}${w.auto ? ' <span class="tag">目录</span>' : ''}</td>
+          <td>${esc(w.type)}${w.mode === 'window' ? ' · 新窗' : ''}</td>
+          <td class="muted" style="font-size:11px;max-width:220px;overflow:hidden;text-overflow:ellipsis">${esc(w.source_path || w.payload || '—')}</td>
+          <td>${w.source_state === 'missing' ? '⚠️ 文件缺失' : (w.visible ? '✅ 展示中' : '🚫 隐藏')}</td>
           <td class="row-actions"><button class="btn ghost sm" data-edit="${w.id}">编辑</button>
             <button class="btn ghost sm" data-del="${w.id}">删除</button></td>
-        </tr>`).join('') || '<tr><td colspan="6"><div class="empty">暂无作品</div></td></tr>'}</tbody></table></div>`;
+        </tr>`).join('') || '<tr><td colspan="7"><div class="empty">暂无作品</div></td></tr>'}</tbody></table></div>
+      <p class="muted" style="font-size:12px;margin-top:10px">新增作品的推荐做法：把 HTML 放进 <code>public/works/期号-代号-标题/index.html</code>，点「重新扫描目录」自动上架；也可在这里手工新增。</p>`;
     $('#add-work').onclick = () => workForm(null);
+    $('#rescan-works').onclick = async () => {
+      const btn = $('#rescan-works');
+      btn.disabled = true; btn.textContent = '扫描中…';
+      try {
+        const s = await API.rescanWorks(false);
+        toast(`扫描完成：新增 ${s.created} · 更新 ${s.updated} · 缺失 ${s.missing}`, 'ok');
+        manageWorksPanel();
+      } catch (e) { toast(e.message, 'err'); btn.disabled = false; btn.textContent = '↻ 重新扫描目录'; }
+    };
     $$('[data-edit]').forEach(b => b.onclick = () => workForm(works.find(w => String(w.id) === b.dataset.edit)));
     $$('[data-del]').forEach(b => b.onclick = async () => {
-      if (!confirm('确认删除该作品？')) return;
+      if (!confirm('确认删除该作品？（不会删除 public/works/ 下的文件）')) return;
       try { await API.deleteWork(b.dataset.del); toast('已删除', 'ok'); manageWorksPanel(); } catch (e) { toast(e.message, 'err'); }
     });
   }
   function workForm(w) {
     const isEdit = !!w;
+    const codes = window.STAR_CODES || [];
     openModal(`<h3>${isEdit ? '编辑作品' : '新增摘星辰作品'}</h3>
       <div class="form">
-        <label>作品标题 *</label><input id="w-title" value="${esc(w ? w.title : '')}">
+        <label>作品标题 *</label><input id="w-title" value="${escAttr(w ? w.title : '')}">
         <div class="form-row">
           <div><label>期数</label><input id="w-issue" type="number" min="1" value="${w ? w.issue_no : 1}"></div>
-          <div><label>星辰代号</label><select id="w-code">${[''].concat(window.STAR_CODES || STAR_CODES).map(c =>
-            `<option value="${c}" ${w && w.code === c ? 'selected' : ''}>${c || '（无）'}</option>`).join('')}</select></div>
+          <div><label>星辰代号</label><select id="w-code">${[''].concat(codes).map(c =>
+            `<option value="${escAttr(c)}" ${w && w.code === c ? 'selected' : ''}>${esc(c || '（无）')}</option>`).join('')}</select></div>
         </div>
         <div class="form-row">
           <div><label>作品类型</label><select id="w-type">
             ${[['html', '交互 HTML'], ['image', '图片'], ['video', '视频'], ['link', '外部链接']].map(([v, t]) =>
               `<option value="${v}" ${w && w.type === v ? 'selected' : ''}>${t}</option>`).join('')}</select></div>
-          <div><label>参与成员（逗号分隔）</label><input id="w-members" value="${esc(w ? w.members : '')}"></div>
+          <div><label>参与成员（逗号分隔）</label><input id="w-members" value="${escAttr(w ? w.members : '')}"></div>
         </div>
-        <label>作品文件 / 链接（类型对应：上传 HTML/图片/视频文件，或粘贴外链）</label>
+        <label>作品文件 / 链接</label>
         <div class="upload-row">
-          <input id="w-payload" value="${esc(w ? w.payload : '')}" placeholder="/media/... 或 https://...">
+          <input id="w-payload" value="${escAttr(w ? w.payload : '')}" placeholder="/works/... 或 /media/... 或 https://...">
           <label class="btn ghost sm" style="display:inline-block;white-space:nowrap">上传文件<input id="w-file" type="file" hidden></label>
         </div>
-        <div class="muted" id="w-file-hint" style="font-size:12px">图片 ≤8MB · 视频 ≤200MB · 其他 ≤50MB</div>
+        <div class="muted" id="w-file-hint" style="font-size:12px">图片 ≤8MB · 视频 ≤200MB · 其他 ≤50MB（HTML 作品建议直接放 public/works/）</div>
         <div class="form-row">
           <div><label>封面图（可空，自动生成星徽）</label>
             <div class="upload-row">
-              <input id="w-cover" value="${esc(w ? w.cover : '')}" placeholder="/media/img/... 或留空">
-              <label class="btn ghost sm" style="display:inline-block;white-space:nowrap">上传封面<input id="w-cover-file" type="file" accept="image/*" hidden></label>
+              <input id="w-cover" value="${escAttr(w ? w.cover : '')}" placeholder="/media/img/... 或留空">
+              <label class="btn ghost sm" style="display:inline-block;white-space:nowrap">上传<input id="w-cover-file" type="file" accept="image/*" hidden></label>
             </div></div>
         </div>
-        <label>简介</label><textarea id="w-summary" rows="4">${esc(w ? w.summary : '')}</textarea>
+        <label>简介（支持 Markdown）</label><textarea id="w-summary" rows="4">${esc(w ? w.summary : '')}</textarea>
         <div class="form-row">
-          <div><label>标签（逗号分隔）</label><input id="w-tags" value="${esc(w ? w.tags : '')}"></div>
-          <div><label>主办单位</label><input id="w-org" value="${esc(w ? w.org : '数文拾光协会')}"></div>
+          <div><label>标签（逗号分隔）</label><input id="w-tags" value="${escAttr(w ? w.tags : '')}"></div>
+          <div><label>主办单位</label><input id="w-org" value="${escAttr(w ? w.org : '数文拾光协会')}"></div>
+        </div>
+        <div class="form-row">
+          <div><label>排序（同期内越大越前）</label><input id="w-sort" type="number" value="${w ? (w.sort || 0) : 0}"></div>
+          <div><label>完成日期</label><input id="w-date" type="date" value="${w ? fmtDate(w.published_at) : ''}"></div>
+        </div>
+        <div class="form-row">
+          <div><label>运行方式</label><select id="w-mode">
+            <option value="embed" ${!w || (w.mode || 'embed') === 'embed' ? 'selected' : ''}>页面内全屏沙箱运行</option>
+            <option value="window" ${w && w.mode === 'window' ? 'selected' : ''}>仅新窗口打开（需 localStorage/模块）</option>
+          </select></div>
         </div>
         <label style="display:flex;align-items:center;gap:8px"><input id="w-visible" type="checkbox" ${!w || w.visible ? 'checked' : ''}> 在平台展示</label>
         <button class="btn" id="w-save">保存</button>
@@ -901,12 +1057,13 @@ const Views = (() => {
       const file = e.target.files[0]; if (!file) return;
       const type = $('#w-type').value;
       const kind = type === 'video' ? 'video' : (type === 'image' ? 'img' : 'file');
-      $('#w-file-hint').textContent = '上传中…';
+      const hint = $('#w-file-hint');
+      hint.textContent = '上传中 0%…';
       try {
-        const r = await API.upload(file, kind);
+        const r = await API.upload(file, kind, p => { hint.textContent = '上传中 ' + p + '%…'; });
         $('#w-payload').value = r.url;
-        $('#w-file-hint').textContent = '✅ 已上传：' + r.url;
-      } catch (err) { $('#w-file-hint').textContent = '❌ ' + err.message; }
+        hint.textContent = '✅ 已上传：' + r.url;
+      } catch (err) { hint.textContent = '❌ ' + err.message; }
     };
     $('#w-cover-file').onchange = async e => {
       const file = e.target.files[0]; if (!file) return;
@@ -921,7 +1078,9 @@ const Views = (() => {
         title: $('#w-title').value.trim(), issue_no: $('#w-issue').value, code: $('#w-code').value,
         type: $('#w-type').value, payload: $('#w-payload').value.trim(), cover: $('#w-cover').value.trim(),
         summary: $('#w-summary').value, members: $('#w-members').value, tags: $('#w-tags').value,
-        org: $('#w-org').value, visible: $('#w-visible').checked
+        org: $('#w-org').value, visible: $('#w-visible').checked,
+        sort: $('#w-sort').value, mode: $('#w-mode').value,
+        published_at: $('#w-date').value || null
       };
       try {
         await API.saveWork(isEdit ? w.id : null, payload);
@@ -946,7 +1105,7 @@ const Views = (() => {
         <tbody>${posts.map(p => `<tr>
           <td>${esc(p.category || '')}</td>
           <td>${esc(p.title)}</td>
-          <td>${p.source_url ? '🔗' : '—'}</td>
+          <td>${/^https?:\/\//i.test(p.source_url || '') ? `<a href="${escAttr(p.source_url)}" target="_blank" rel="noopener noreferrer" title="${escAttr(p.source_url)}">🔗</a>` : '—'}</td>
           <td>${p.visible ? '✅ 展示中' : '🚫 隐藏'}</td>
           <td class="row-actions"><button class="btn ghost sm" data-edit="${p.id}">编辑</button>
             <button class="btn ghost sm" data-del="${p.id}">删除</button></td>
@@ -960,29 +1119,52 @@ const Views = (() => {
   }
   function postForm(p) {
     const isEdit = !!p;
+    const cats = Settings.list('news.categories', ['动态', '时事', '项目与赛事', '工具', '学习资源']);
+    if (p && p.category && !cats.includes(p.category)) cats.push(p.category);
     openModal(`<h3>${isEdit ? '编辑资讯' : '新增资讯'}</h3>
       <div class="form">
-        <label>标题 *</label><input id="p-title" value="${esc(p ? p.title : '')}">
+        <label>标题 *</label><input id="p-title" value="${escAttr(p ? p.title : '')}">
         <div class="form-row">
-          <div><label>分类</label><select id="p-cat">${['动态', '时事', '工具', '学习资源'].map(c =>
-            `<option ${p && p.category === c ? 'selected' : ''}>${c}</option>`).join('')}</select></div>
+          <div><label>分类</label><select id="p-cat">${cats.map(c =>
+            `<option value="${escAttr(c)}" ${p && p.category === c ? 'selected' : ''}>${esc(c)}</option>`).join('')}</select></div>
           <div><label>发布日期</label><input id="p-date" type="date" value="${p ? fmtDate(p.published_at) : new Date().toISOString().slice(0, 10)}"></div>
         </div>
         <label>摘要</label><textarea id="p-summary" rows="2">${esc(p ? p.summary : '')}</textarea>
-        <label>正文（支持 Markdown：## 标题 / **粗体** / - 列表 / [文字](网址)）</label>
-        <textarea id="p-content" rows="8">${esc(p ? p.content : '')}</textarea>
+        <label>正文（Markdown：## 标题 / **粗体** / - 列表 / 1. 有序 / &gt; 引用 / 表格 / [文字](网址)）</label>
+        <textarea id="p-content" rows="9">${esc(p ? p.content : '')}</textarea>
+        <label>原文链接（点击跳转浏览器；粘贴后点「抓取」可自动补标题与摘要）</label>
+        <div class="upload-row">
+          <input id="p-srcurl" value="${escAttr(p ? p.source_url : '')}" placeholder="https://...">
+          <button class="btn ghost sm" id="p-fetch" type="button">抓取</button>
+        </div>
+        <div class="muted" id="p-fetch-hint" style="font-size:12px"></div>
         <div class="form-row">
-          <div><label>来源名称</label><input id="p-srcname" value="${esc(p ? p.source_name : '')}"></div>
-          <div><label>原文链接（点击跳转浏览器）</label><input id="p-srcurl" value="${esc(p ? p.source_url : '')}" placeholder="https://..."></div>
+          <div><label>来源名称</label><input id="p-srcname" value="${escAttr(p ? p.source_name : '')}"></div>
+          <div><label>排序</label><input id="p-sort" type="number" value="${p ? (p.sort || 0) : 0}"></div>
         </div>
         <label>封面图（可空）</label>
         <div class="upload-row">
-          <input id="p-cover" value="${esc(p ? p.cover : '')}" placeholder="/media/img/... 或留空">
-          <label class="btn ghost sm" style="display:inline-block;white-space:nowrap">上传封面<input id="p-cover-file" type="file" accept="image/*" hidden></label>
+          <input id="p-cover" value="${escAttr(p ? p.cover : '')}" placeholder="/media/img/... 或留空">
+          <label class="btn ghost sm" style="display:inline-block;white-space:nowrap">上传<input id="p-cover-file" type="file" accept="image/*" hidden></label>
         </div>
         <label style="display:flex;align-items:center;gap:8px"><input id="p-visible" type="checkbox" ${!p || p.visible ? 'checked' : ''}> 在平台展示</label>
         <button class="btn" id="p-save">保存</button>
       </div>`);
+    $('#p-fetch').onclick = async () => {
+      const url = $('#p-srcurl').value.trim();
+      const hint = $('#p-fetch-hint');
+      if (!url) { hint.textContent = '请先粘贴链接'; return; }
+      hint.textContent = '抓取中…';
+      try {
+        const r = await API.fetchLink(url);
+        // 只补空字段，不覆盖已填写内容
+        if (r.title && !$('#p-title').value.trim()) $('#p-title').value = r.title;
+        if (r.summary && !$('#p-summary').value.trim()) $('#p-summary').value = r.summary;
+        if (r.source_name && !$('#p-srcname').value.trim()) $('#p-srcname').value = r.source_name;
+        if (r.published_at && !$('#p-date').value) $('#p-date').value = r.published_at;
+        hint.textContent = '✅ 已抓取：' + (r.title || '（无标题）');
+      } catch (e) { hint.textContent = '❌ ' + e.message; }
+    };
     $('#p-cover-file').onchange = async e => {
       const file = e.target.files[0]; if (!file) return;
       try { const r = await API.upload(file, 'img'); $('#p-cover').value = r.url; toast('封面上传成功', 'ok'); }
@@ -994,7 +1176,7 @@ const Views = (() => {
         summary: $('#p-summary').value, content: $('#p-content').value,
         source_name: $('#p-srcname').value, source_url: $('#p-srcurl').value.trim(),
         cover: $('#p-cover').value.trim(), visible: $('#p-visible').checked,
-        published_at: $('#p-date').value || null
+        sort: $('#p-sort').value, published_at: $('#p-date').value || null
       };
       try {
         await API.savePost(isEdit ? p.id : null, payload);
@@ -1003,34 +1185,131 @@ const Views = (() => {
     };
   }
 
+  // ---- 站点文案 ----
+  async function manageSettingsPanel() {
+    const body = $('#manage-body');
+    body.innerHTML = '<div class="empty"><span class="spin"></span> 加载中…</div>';
+    const r = await API.manageSettings();
+    const cur = r.settings || {};
+    const schema = r.schema || [];
+    body.innerHTML = `
+      <p class="muted" style="font-size:13px;margin:0 0 14px">改完点底部「保存全部」。留空 = 回落默认文案。</p>
+      ${schema.map(g => `
+        <div class="card" style="margin-bottom:14px">
+          <h4 style="margin:0 0 12px;color:var(--accent)">${esc(g.group)}</h4>
+          <div class="form">
+            ${g.items.map(it => `
+              <label>${esc(it.label)}${it.hint ? `<span class="muted" style="font-weight:400;font-size:11px"> · ${esc(it.hint)}</span>` : ''}</label>
+              ${it.type === 'textarea'
+                ? `<textarea data-k="${escAttr(it.key)}" rows="2">${esc(cur[it.key] || '')}</textarea>`
+                : `<input data-k="${escAttr(it.key)}" value="${escAttr(cur[it.key] || '')}">`}
+            `).join('')}
+          </div>
+        </div>`).join('')}
+      <div style="display:flex;gap:10px;position:sticky;bottom:10px;background:var(--card);padding:12px;border-radius:12px;border:1px solid var(--line)">
+        <button class="btn" id="set-save">保存全部</button>
+        <button class="btn ghost" id="set-reset">还原默认</button>
+      </div>`;
+    $('#set-save').onclick = async () => {
+      const patch = {};
+      $$('#manage-body [data-k]').forEach(el => { patch[el.dataset.k] = el.value; });
+      try {
+        const res = await API.saveSettings(patch);
+        Settings.load(res.settings);
+        applySiteText();
+        toast('文案已保存（' + res.saved.length + ' 项）', 'ok');
+      } catch (e) { toast(e.message, 'err'); }
+    };
+    $('#set-reset').onclick = async () => {
+      if (!confirm('全部文案还原为默认值？')) return;
+      const patch = {};
+      Object.keys(cur).forEach(k => { patch[k] = ''; });
+      try {
+        const res = await API.saveSettings(patch);
+        Settings.load(res.settings);
+        applySiteText();
+        toast('已还原默认', 'ok');
+        manageSettingsPanel();
+      } catch (e) { toast(e.message, 'err'); }
+    };
+  }
+
+  // ---- 媒体库 ----
+  async function manageMediaPanel() {
+    const body = $('#manage-body');
+    body.innerHTML = '<div class="empty"><span class="spin"></span> 加载中…</div>';
+    const r = await API.mediaList();
+    const files = r.files || [];
+    const mb = n => (n / 1024 / 1024).toFixed(n > 1024 * 1024 ? 1 : 2) + ' MB';
+    body.innerHTML = `
+      <div class="manage-bar">
+        <span class="muted" style="font-size:13px">${files.length} 个文件 · 合计 ${mb(r.totalBytes)}</span>
+        <button class="btn ghost sm" id="media-reload">↻ 刷新</button>
+      </div>
+      ${files.length ? `<div class="card" style="padding:0;overflow:auto"><table>
+        <thead><tr><th>路径</th><th>大小</th><th>引用</th><th>时间</th><th>操作</th></tr></thead>
+        <tbody>${files.map(f => `<tr>
+          <td style="font-size:11px;word-break:break-all"><a href="${escAttr(assetUrl(f.path))}" target="_blank" rel="noopener">${esc(f.path)}</a></td>
+          <td>${(f.size / 1024).toFixed(0)} KB</td>
+          <td>${f.refs ? `<span class="tag">${f.refs} 处</span>` : '<span class="muted">未引用</span>'}</td>
+          <td class="muted" style="font-size:11px">${fmtDate(f.mtime)}</td>
+          <td class="row-actions"><button class="btn ghost sm" data-mdel="${escAttr(f.path)}" data-refs="${f.refs}">删除</button></td>
+        </tr>`).join('')}</tbody></table></div>`
+        : '<div class="empty" style="padding:36px">还没有上传任何文件<br><span class="muted">在「作品」或「资讯」里上传图片/视频后会出现在这里</span></div>'}
+      <p class="muted" style="font-size:12px;margin-top:10px">被内容引用的文件删除后会变成坏链，需二次确认。作品 HTML 不放这里，请放 <code>public/works/</code>。</p>`;
+    $('#media-reload').onclick = () => manageMediaPanel();
+    $$('[data-mdel]').forEach(b => b.onclick = async () => {
+      const p = b.dataset.mdel, refs = +b.dataset.refs || 0;
+      if (!confirm(refs ? `该文件被 ${refs} 处内容引用，删除后会变成坏链。仍要删除？` : '确认删除该文件？')) return;
+      try {
+        await API.deleteMedia(p, refs > 0);
+        toast('已删除', 'ok'); manageMediaPanel();
+      } catch (e) { toast(e.message, 'err'); }
+    });
+  }
+
   // ---- 发布静态版 ----
   function managePublishPanel() {
     $('#manage-body').innerHTML = `
-      <div class="card" style="max-width:640px">
-        <h3 style="margin-top:0">🚀 生成静态发布版</h3>
-        <p class="muted" style="font-size:13px">把当前平台内容导出为纯静态只读网站（dist-static/ 目录），可上传到 GitHub Pages / Vercel 等免费托管，分享链接给同学浏览。</p>
+      <div class="card" style="max-width:680px">
+        <h3 style="margin-top:0">🚀 导出与备份</h3>
+        <p class="muted" style="font-size:13px">两个用途不同，按需选：</p>
         <ul class="muted" style="font-size:13px;line-height:1.9">
-          <li>包含：全部页面 + 书库数据 + 摘星辰作品 + 资讯 + 封面与媒体文件（≤90MB）</li>
-          <li>不包含：管理端、AI 服务（静态版隐藏 AI 入口）</li>
-          <li>发布方式：把 <code>dist-static/</code> 内全部文件推送到 gh-pages 分支，或拖入 Vercel / Netlify</li>
+          <li><b>静态发布版</b>：导出到 <code>dist-static/</code>，可传 GitHub Pages / Vercel，给同学分享只读链接</li>
+          <li><b>离线快照</b>：生成 <code>public/data/snapshot.js</code>，不启动服务、直接双击 <code>index.html</code> 也能看全部内容（只读）</li>
         </ul>
-        <button class="btn" id="pub-btn">开始导出</button>
+        <div style="display:flex;gap:10px;flex-wrap:wrap">
+          <button class="btn" id="pub-btn">导出静态发布版</button>
+          <button class="btn ghost" id="snap-btn">生成离线快照</button>
+        </div>
         <div id="pub-result" class="muted" style="margin-top:12px;font-size:13px"></div>
       </div>`;
+    const box = $('#pub-result');
     $('#pub-btn').onclick = async () => {
       const btn = $('#pub-btn');
       btn.disabled = true; btn.textContent = '导出中，请稍候…';
-      const box = $('#pub-result');
       box.textContent = '正在 checkpoint 数据库并拷贝资源…';
       try {
         const r = await API.publish();
         box.innerHTML = `<div class="digest"><div class="digest-h">✅ 导出完成</div><div class="digest-body">
           输出目录：<code>${esc(r.dir || 'dist-static/')}</code><br>
-          文件数：${r.files != null ? r.files : '—'}<br>
-          ${r.skippedMedia && r.skippedMedia.length ? '⚠️ 超限未打包的媒体（请改为外链）：<br>' + r.skippedMedia.map(m => '<code>' + esc(m) + '</code>').join('<br>') : '媒体文件全部包含 ✅'}
+          文件数：${r.files != null ? r.files : '—'}｜媒体：${r.mediaFiles != null ? r.mediaFiles : '—'} 个（${r.mediaMB != null ? r.mediaMB : '—'} MB）<br>
+          ${r.skippedMedia && r.skippedMedia.length
+            ? '⚠️ 超出单次打包上限未复制的媒体（请改为外链）：<br>' + r.skippedMedia.map(m => '<code>' + esc(m) + '</code>').join('<br>')
+            : '媒体文件全部包含 ✅'}
         </div></div>`;
       } catch (e) { box.textContent = '❌ ' + e.message; }
-      btn.disabled = false; btn.textContent = '开始导出';
+      btn.disabled = false; btn.textContent = '导出静态发布版';
+    };
+    $('#snap-btn').onclick = async () => {
+      const btn = $('#snap-btn');
+      btn.disabled = true; btn.textContent = '生成中…';
+      try {
+        const r = await API.snapshot();
+        box.innerHTML = `<div class="digest"><div class="digest-h">✅ 离线快照已生成</div><div class="digest-body">
+          <code>${esc(r.file)}</code>（${r.kb} KB）<br>现在直接双击 <code>public/index.html</code> 就能离线浏览（只读）。</div></div>`;
+      } catch (e) { box.textContent = '❌ ' + e.message; }
+      btn.disabled = false; btn.textContent = '生成离线快照';
     };
   }
 
