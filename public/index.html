@@ -5,8 +5,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#c2693b" />
   <link rel="manifest" href="./manifest.webmanifest" />
-  <title>数字人文学院图书室 · 智能管理系统</title>
+  <title>数文拾光 · 数字人文平台</title>
   <link rel="stylesheet" href="./css/style.css" />
+  <script type="importmap">
+    { "imports": { "three": "./vendor/three.module.min.js" } }
+  </script>
 </head>
 <body>
   <div id="bg-grid"></div>
@@ -14,8 +17,8 @@
     <div class="brand" onclick="location.hash='#/home'">
       <div class="logo">DH</div>
       <div class="brand-text">
-        <strong>数字人文学院图书室</strong>
-        <span>AI + 智能管理系统</span>
+        <strong>数文拾光 · 数字人文平台</strong>
+        <span>宇宙 · 书库 · 摘星辰 · 资讯</span>
       </div>
     </div>
     <nav id="nav"></nav>
@@ -43,7 +46,7 @@
         </svg>
         <div>
           <strong>数智馆员 · 小文</strong>
-          <small id="ai-status-line">数字人文专业 AI 助手</small>
+          <small id="ai-status-line">数字人文平台 AI 助手</small>
         </div>
       </div>
       <div class="ai-head-actions">
@@ -53,7 +56,7 @@
     </div>
     <div id="ai-log"></div>
     <div id="ai-input-row">
-      <input id="ai-input" placeholder="问我：推荐几本数字人文的书 / 有没有 Python 入门" />
+      <input id="ai-input" placeholder="问我：推荐几本数字人文的书 / 摘星辰是什么" />
       <button id="ai-send">发送</button>
     </div>
     <div id="ai-resizer" title="拖动调整面板大小"></div>
@@ -61,17 +64,10 @@
 
   <div id="toast" class="hidden"></div>
 
-  <script>
-    if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-      window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').catch(() => {});
-      });
-    }
-  </script>
-
   <script src="./config.js"></script>
   <script src="./js/charts.js"></script>
   <script src="./js/ai.js"></script>
+  <script src="./js/galaxy.js"></script>
   <script src="./js/views.js"></script>
   <script src="./js/app.js"></script>
 </body>

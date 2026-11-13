@@ -1,5 +1,5 @@
-const CACHE = 'dh-lib-v2';
-const ASSETS = ['/', '/css/style.css', '/js/app.js', '/js/views.js', '/js/ai.js', '/js/charts.js', '/manifest.webmanifest', '/icon.svg'];
+const CACHE = 'dh-platform-v3';
+const ASSETS = ['/', '/css/style.css', '/js/app.js', '/js/views.js', '/js/ai.js', '/js/charts.js', '/js/galaxy.js', '/manifest.webmanifest', '/icon.svg'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS).catch(() => {})).then(() => self.skipWaiting()));

@@ -1,153 +1,114 @@
-# 数字人文学院图书室 · AI 智能管理系统
+# 数文拾光 · 数字人文平台
 
-为数字人文学院图书室打造的轻量化图书管理系统，同时作为「高校图书馆 AI+管理服务」大赛的参赛底座（v1）。
+面向大学生的数字人文综合性展示平台：宇宙首页（3D 星系）· 书库 · 摘星辰 · 资讯 · AI 馆员。
+由创始人统一维护内容，访客免登录只读浏览；支持「本地完整版 + 一键发布纯静态版」双模式。
 
-## 特性
-- **轻量零云费用**：前端原生 HTML/CSS/JS（零框架），后端 Node.js + Express + SQLite（单文件数据库）。
-- **完整业务**：图书编目 / 检索筛选、借阅审批流（待审批→待取书→借出）、读者管理、数据看板（自绘 Canvas 图表）。
-- **知识星空首页**：每本书是一颗星，随机闪烁，点「星尘奇遇」随机邂逅一本书，强化探索感。
-- **数字人 AI 助手「小文」**：数字人文专业形象的对话助手，离线规则引擎 / 可一键切真实大模型。
-- **公开数据**：图书流动排行榜（最受欢迎 / 冷门 / 借阅之星 / 好评）、数字人文分析版块、读者评论 + AI 情感分析，数据真实、匿名化。
-- **三种运行方式**：
-  1. 本地开发 `npm start`（Node 服务，http://localhost:3000）。
-  2. 双击 HTML 打开：后端部署到 Zeabur/CloudBase 后，在 `public/config.js` 填入远程域名，直接双击 `public/index.html` 即可使用全部功能。
-  3. 全栈云部署：前端静态托管 + 后端远程运行，得到一个可分享的 https 网址。
-- **容量目标**：SQLite WAL 模式，支撑 ≥2000 读者注册借阅、50 人并发。
+> 前身是「数字人文学院图书室 AI 智能管理系统」（v1 图书管理），v2.0 扩展为数字人文平台，
+> 696 本学院真实馆藏完整保留，借阅/用户体系按平台定位移除。
 
-## 运行环境
-- Node.js ≥ 18（推荐 20+）
+## 四大版块
+
+| 版块 | 内容 |
+|---|---|
+| 🌌 宇宙首页 | Three.js 3D 星系：馆藏按分类组成四条旋臂，摘星辰作品是亮星（点击直达），资讯是入口卡；WebGL 不可用自动回退 2D Canvas 星空；实验性 WebXR VR 按钮 |
+| 📚 书库 | 696 本学院真实馆藏：检索 / 分类筛选 / 分页 / 详情 / AI 导读；封面按索书号 `/covers/<索书号>.jpg` 加载，缺图自动生成设计感书封 |
+| ✨ 摘星辰 | 数文拾光协会周期性可视化实践成果陈列：每件作品含星辰代号（北极星/启明星/织女星…）、期数、成员、简介；支持 交互HTML(iframe 沙箱)/图片/视频/外链 四种形态 |
+| 📰 资讯·专业 | 数字人文领域动态 / 时事 / 工具 / 学习资源，图文条目 + 「跳转浏览器原文」外链 |
+
+## 运行架构
+
+- **本地完整版**（日常）：`npm start` → http://localhost:3000 。创始人凭口令进入 `#/manage` 管理端：
+  录入/编辑摘星辰作品与资讯、上传图片/视频/HTML 作品文件、一键发布静态版。
+- **静态发布版**（分享）：管理端点「发布」或 `npm run publish` → 产出 `dist-static/` 纯静态只读站点
+  （数据为 `data/*.json`，无后端、无管理入口、无 AI），整目录丢到 GitHub Pages / Vercel / 任意静态托管即可分享链接。
 
 ## 快速开始
+
 ```bash
-# 1. 进入项目目录（D 盘）
 cd "D:\workbuddyxiangmu\数字人文学院图书管理系统"
-
-# 2. 安装依赖（仅 express + better-sqlite3）
-npm install
-
-# 3. 启动
-npm start
-# 或： node server/server.js
-
-# 4. 浏览器打开
-http://localhost:3000
+npm install          # express + cors + better-sqlite3 + multer
+npm start            # http://localhost:3000
 ```
 
-## 默认账号
-| 角色 | 账号 | 密码 |
-|------|------|------|
-| 管理员 | `admin` | `admin123` |
-| 馆员 | `librarian` | `lib12345` |
+### 创始人口令
 
-读者请在首页「注册」自助创建（默认角色=读者，可借 5 本）。
+口令来自 `.env` 的 `FOUNDER_PASSCODE`（首次启动未配置会自动生成并写回 `.env`，控制台打印一次）。
+浏览器打开 `http://localhost:3000/#/manage`（入口是导航栏右侧的「·」）输入口令解锁。
+
+`.env` 示例（见 `.env.example`）：
+```ini
+FOUNDER_PASSCODE=你的口令
+TOKEN_SECRET=一串随机字符串
+# LLM_API_URL / LLM_API_KEY / LLM_MODEL  可选：接入真实大模型
+```
+
+### 发布静态版
+
+```bash
+npm run publish      # 或管理端「发布静态版」按钮
+npx serve dist-static   # 本地预览；上线则把 dist-static/ 推到静态托管
+```
 
 ## 目录结构
+
 ```
-数字人文学院图书管理系统/
-├─ server/              # 后端（Node.js + Express + SQLite）
-│  ├─ server.js         # 入口与路由（图书/借阅审批/管理/AI/封面）
-│  ├─ db.js             # 数据库初始化、建表、种子数据
-│  ├─ auth.js           # 注册/登录/角色鉴权
-│  ├─ ai.js             # AI 馆员智能体（意图识别/工具集/会话记忆/LLM 工具增强）
-│  └─ crypto.js         # 密码哈希 + token 签名（零依赖）
-├─ public/              # 前端（原生 HTML/CSS/JS）
-│  ├─ index.html
-│  ├─ config.js         # 远程后端域名配置（本地留空，部署时填写）
-│  ├─ css/style.css
+├─ server/
+│  ├─ server.js         # 入口与路由（公开只读 API + /api/manage/* + 上传 + /api/publish）
+│  ├─ db.js             # 建表（books/works/posts）与种子数据
+│  ├─ manage-auth.js    # 创始人单口令 → HMAC token（限速 5 次/分钟）
+│  ├─ publish.js        # 静态导出核心（拷贝 public + 注入 STATIC_MODE 配置 + data/*.json）
+│  ├─ ai.js             # AI 馆员智能体（检索/荐书/导读，无借阅）
+│  └─ crypto.js         # scrypt 哈希 + token 签名（零依赖）
+├─ public/
+│  ├─ index.html        # importmap(three) + 四版块 SPA
+│  ├─ js/galaxy.js      # 3D 星系（本地 vendor three r160，无 CDN 依赖）
 │  ├─ js/{app,views,charts,ai}.js
-│  ├─ covers/           # 书籍封面
-│  └─ data/import-template.json
-├─ data/                # 运行时数据（库文件 + 种子）
-│  ├─ library.db*       # 自动生成
-│  └─ seed-books.json
-├─ references/          # 馆藏源资料（不入库，已备份于 references.bak/）
-│  └─ source-data/
-│     ├─ 馆藏数据/        # 馆藏图书信息.xlsx（入库权威源）
-│     └─ 制度与培训/      # 图书室管理制度.docx / 编目培训.pptx
-├─ scripts/             # 工具脚本
-│  ├─ seed-test.js       # 2000 测试读者 + 800 借阅（压测/演示）
-│  ├─ seed_demo.js       # 40 名 demo 读者 + 120 天借阅流水（看板演示）
-│  ├─ verify.js          # 7 项 API 自检（筛选/字段/导入/封面）
-│  └─ build_seed.py      # 解析「馆藏图书信息.xlsx」→ data/seed-books.json
-├─ docs/                # 文档（deploy-simple.md 简单上线 / deployment-guide-2000.md 学院落地）
-└─ README.md
+│  ├─ vendor/           # three.module.min.js / OrbitControls / VRButton
+│  ├─ covers/           # 封面（按索书号命名：<索书号>.jpg）
+│  ├─ media/            # 管理端上传的作品/资讯文件
+│  └─ img/bg-dusk.jpg   # AI 生成的晨昏霞光页面背景
+├─ scripts/export-static.js  # CLI 发布
+├─ data/library.db      # SQLite（books 696 / works / posts）
+└─ docs/
 ```
 
-## 导入真实书目
-1. 下载模板：`public/data/import-template.json`（后台「导入」页也可一键下载）。
-2. 按字段填入你的真实馆藏（title 必填；category/tags 建议规范填写）。
-3. 馆员/管理员进入「导入」页，上传 JSON 或 CSV，选择「仅新增」或「按 ISBN 更新」，提交即可。
+## 内容管理（#/manage）
 
-字段：`title, author, isbn, publisher, year, category, tags, location, intro, total`
+- **摘星辰作品**：星辰代号 / 期数 / 标题 / 简介(支持 Markdown) / 成员 / 类型
+  （`html` 交互作品 iframe 沙箱嵌入 · `image` · `video` · `link` 外链）/ 封面 / 标签 / 排序 / 可见性。
+- **资讯**：分类（动态/时事/工具/学习资源）/ 标题 / 摘要 / 正文(Markdown) / 封面 / 来源名+原文链接。
+- **上传**：`POST /api/manage/upload?kind=img|video|file`（multer，白名单扩展名，存 `public/media/`）。
+- **发布**：`POST /api/publish` → `dist-static/`（含 publish-checkpoint.json 发布指纹）。
 
-## AI 馆员智能体
+## AI 馆员「小文」
 
-内置「离线智能体」，零 API、零费用，全部回答基于本机 SQLite 真实数据：
+离线规则引擎跑满全部能力（零 API 零费用），配置 `LLM_API_URL + LLM_API_KEY` 后自动升级为工具增强大模型。
 
 | 能力 | 示例说法 |
 |---|---|
 | 检索 | 「有没有 Python 入门的书」「鲁迅有什么书」 |
-| 个性化推荐 | 「推荐几本书」「推荐 3 本历史的书」 |
-| 相似书 | 「跟《乡土中国》类似的书」 |
-| 库存 / 位置 | 「《乡土中国》在哪，能借吗」 |
-| 导读 / 口碑 | 「介绍一下《乡土中国》」「这本书口碑怎么样」 |
-| 分类浏览 | 「有哪些分类？」「历史有什么书？」 |
-| 馆藏统计 | 「馆藏有多少本书？」 |
-| 借阅热门 | 「热门榜」 |
-| 我的借阅 | 「我借了哪些书？」（需登录） |
-| 借阅规则 | 「借期是多久？」「逾期怎么办」 |
-| 多轮追问 | 「换一批」「第 2 本」「这本书怎么样」 |
+| 推荐 / 相似书 | 「推荐几本书」「跟《乡土中国》类似的书」 |
+| 位置 / 馆藏 | 「《乡土中国》在哪」 |
+| 导读 | 「介绍一下《乡土中国》」 |
+| 平台介绍 | 「摘星辰是什么」「平台有哪些版块」 |
+| 多轮追问 | 「换一批」「第 2 本」 |
 
-能力清单：`GET /api/ai/status`；清空会话：`POST /api/ai/reset`；智能检索：`GET /api/ai/search?q=&limit=`。
-
-自检脚本：
 ```bash
-node scripts/_ai_agent_test.js      # 20 组问法离线跑一遍
-node scripts/_ai_llm_mock_test.js   # 用本地 mock 验证大模型工具增强链路
+node scripts/_ai_agent_test.js      # 22 组问法离线回归
+node scripts/_ai_llm_mock_test.js   # mock 大模型工具链路回归
+node scripts/_star_layout_test.js   # 2D 星空兜底渲染回归
 ```
 
-## 接入真实大模型（可选，工具增强）
-配置后 AI 自动升级为「工具增强大模型」：模型先选工具 → 本机执行 → 拿真实数据作答，任何异常都回落离线智能体。
-兼容所有 OpenAI 格式接口（DeepSeek / 通义 / 智谱 / Kimi / 硅基流动 / Ollama / vLLM）：
-```bash
-set LLM_API_URL=https://api.deepseek.com/v1/chat/completions
-set LLM_API_KEY=你的密钥
-set LLM_MODEL=deepseek-chat
-rem 可选：LLM_TEMPERATURE=0.6  LLM_MAX_TOKENS=700  LLM_TIMEOUT_MS=20000
-node server.js
-```
-未配置时完全离线运行，功能不打折。
+## 书库数据维护
 
-## 工具脚本（可选）
-```bash
-# 压测 / 演示数据
-node scripts/seed-test.js        # 生成 2000 测试读者 + 800 条借阅
-node scripts/seed-test.js clean  # 清除上述测试数据
+- 重灌馆藏：删 `data/library.db*` → 重启（自动按 `data/seed-books.json` 种子重建）。
+- 增量导入：JSON 模板 `public/data/import-template.json`；索书号优先去重，其次 ISBN。
+- 封面：把 `<索书号>.jpg` 放进 `public/covers/`；命名规范见 `public/covers/README.txt`。
 
-# 看板演示数据（让排行榜 / 流动分析有运营感）
-node scripts/seed_demo.js        # 生成 40 名 demo_* 读者 + 过去 120 天借阅流水（密码 demo123）
+## 技术要点
 
-# 接口自检（7 项：筛选计数、索书号/价格字段、馆员登录、新增、导入幂等、按编码更新、封面 404 回退）
-node scripts/verify.js
-
-# 从馆藏 xlsx 重建种子 JSON（纯标准库，无需 openpyxl）
-python scripts/build_seed.py     # 读取 references/source-data/馆藏数据/馆藏图书信息.xlsx → data/seed-books.json
-```
-
-## 部署上线（无需本地运行）
-详见 `docs/deploy-simple.md`，包含：
-- 双击 `index.html` + 远程后端的配置方法
-- Zeabur 一键部署全栈（免费额度足够比赛演示）
-- CloudBase 国内 2000 人长期落地方案及费用估算
-
-核心配置只需改 `public/config.js`：
-```js
-// 本地开发保持空字符串
-window.API_BASE = '';
-
-// 远程部署示例（Zeabur/CloudBase 给你的域名）
-// window.API_BASE = 'https://your-app.zeabur.app';
-```
-
-## 后续（比赛材料）
-申报书 / 建设说明书 / 展示视频等，在系统基础上单独补充。
+- 原生 HTML/CSS/JS SPA（hash 路由），前端零框架；后端仅 4 个 npm 依赖。
+- 3D 星系：本地 vendor three.js r160 + OrbitControls；单 draw call 合并馆藏星点；手机端降粒子数；
+  `prefers-reduced-motion` 停自动旋转；WebXR 仅在浏览器支持沉浸式会话时出现 VR 按钮。
+- 静态发布版通过 `window.STATIC_MODE` 把 `/api/*` GET 映射到 `data/*.json`，路径全部相对化，兼容 GitHub Pages 子路径。
+- 主题：晨昏中间调（浅色=暖米纸+暮蓝星空 + AI 生成霞光纹理；深色=暖棕夜色），支持一键切换。

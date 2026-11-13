@@ -1,5 +1,5 @@
 'use strict';
-// 应用核心：状态 / API 客户端 / 路由 / 导航 / 启动
+// 应用核心：状态 / API 客户端 / 路由 / 导航 / 启动（数字人文平台版，无用户系统）
 
 function colorFor(str) {
   let h = 0; for (let i = 0; i < (str || '?').length; i++) h = (h * 31 + str.charCodeAt(i)) % 360;
@@ -58,85 +58,171 @@ function coverFallback(img) {
 }
 window.coverFallback = coverFallback;
 
-// 远程后端配置：config.js 设置 window.API_BASE；留空表示同域（localhost 或同域名部署）
-// 示例：window.API_BASE = 'https://your-app.zeabur.app';
+// 远程后端 / 静态模式配置
+// 本地模式：API_BASE 空（同域 localhost:3000），完整功能
+// 静态发布版：config.js 注入 window.STATIC_MODE=true，公开 GET 走本地 data/*.json
 window.API_BASE = window.API_BASE || '';
 window.STATIC_BASE = window.STATIC_BASE || window.API_BASE;
+window.STATIC_MODE = !!window.STATIC_MODE;
 function apiUrl(path) { return window.API_BASE + path; }
-function coverUrl(callNo) { return (window.STATIC_BASE || '') + '/covers/' + encodeURIComponent(callNo) + '.jpg'; }
+function coverUrl(callNo) {
+  // 静态发布版走相对路径（兼容 GitHub Pages 子路径）；本地版同域绝对路径
+  if (window.STATIC_MODE) return assetUrl('/covers/' + encodeURIComponent(callNo) + '.jpg');
+  return (window.STATIC_BASE || '') + '/covers/' + encodeURIComponent(callNo) + '.jpg';
+}
+// 静态模式下资源路径相对化（兼容 GitHub Pages 子路径）
+function assetUrl(p) {
+  if (!window.STATIC_MODE) return p;
+  return (window.ASSET_BASE || './') + String(p).replace(/^\//, '');
+}
 window.apiUrl = apiUrl;
 window.coverUrl = coverUrl;
+window.assetUrl = assetUrl;
+
+// 静态模式下的 GET 映射：/api/xxx → data/xxx.json
+const STATIC_GET_MAP = {
+  '/api/books': 'data/books.json',
+  '/api/categories': 'data/categories.json',
+  '/api/stars': 'data/stars.json',
+  '/api/overview': 'data/overview.json',
+  '/api/works': 'data/works.json',
+  '/api/posts': 'data/posts.json',
+  '/api/meta': 'data/meta.json'
+};
 
 const State = {
-  token: localStorage.getItem('dh_token') || '',
-  user: null,
-  set(t, u) { this.token = t; this.user = u; localStorage.setItem('dh_token', t); },
-  clear() { this.token = ''; this.user = null; localStorage.removeItem('dh_token'); }
+  manageToken: localStorage.getItem('dh_manage_token') || '',
+  setManage(t) { this.manageToken = t; localStorage.setItem('dh_manage_token', t); },
+  clearManage() { this.manageToken = ''; localStorage.removeItem('dh_manage_token'); }
 };
 
 const API = {
   async req(method, url, body) {
+    // 静态模式：公开 GET 直接读本地 JSON
+    if (window.STATIC_MODE && method === 'GET') {
+      const m = Object.keys(STATIC_GET_MAP).find(k => url === k || url.startsWith(k + '?'));
+      if (m) {
+        // 带查询参数时先全量取回再前端过滤（静态版数据量小，可接受）
+        const res = await fetch(assetUrl(STATIC_GET_MAP[m]));
+        const data = await res.json();
+        return filterStatic(m, url, data);
+      }
+      if (url.startsWith('/api/works/')) {
+        const id = url.split('/')[3];
+        const res = await fetch(assetUrl('data/works-full.json'));
+        const all = await res.json();
+        const item = (all.works || []).find(w => String(w.id) === String(id));
+        if (!item) throw new Error('未找到该作品');
+        return { work: item, related: (all.works || []).filter(w => w.id !== item.id && w.issue_no === item.issue_no).slice(0, 4) };
+      }
+      if (url.startsWith('/api/posts/')) {
+        const id = url.split('/')[3];
+        const res = await fetch(assetUrl('data/posts-full.json'));
+        const all = await res.json();
+        const item = (all.posts || []).find(p => String(p.id) === String(id));
+        if (!item) throw new Error('未找到该资讯');
+        return { post: item };
+      }
+      if (url.startsWith('/api/books/')) {
+        const id = url.split('/')[3];
+        const res = await fetch(assetUrl('data/books-full.json'));
+        const all = await res.json();
+        const item = (all.books || []).find(b => String(b.id) === String(id));
+        if (!item) throw new Error('未找到该书');
+        const related = (all.books || []).filter(b => b.category === item.category && b.id !== item.id).slice(0, 6);
+        return { book: item, related };
+      }
+      if (url.startsWith('/api/ai/')) { throw new Error('静态展示版不提供 AI 服务，请访问完整版'); }
+      throw new Error('静态展示版不支持该操作');
+    }
     const headers = {};
     if (body !== undefined) headers['Content-Type'] = 'application/json';
-    if (State.token) headers['Authorization'] = 'Bearer ' + State.token;
+    if (State.manageToken) headers['Authorization'] = 'Bearer ' + State.manageToken;
     const res = await fetch(apiUrl(url), { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined });
     let data = {};
     try { data = await res.json(); } catch (e) {}
-    if (!res.ok) throw new Error(data.error || ('请求失败 (' + res.status + ')'));
+    if (!res.ok) {
+      if (res.status === 401 && State.manageToken) State.clearManage();
+      throw new Error(data.error || ('请求失败 (' + res.status + ')'));
+    }
     return data;
   },
   books(p = {}) { const qs = new URLSearchParams(p).toString(); return this.req('GET', '/api/books?' + qs); },
   categories() { return this.req('GET', '/api/categories').then(r => r.categories || []); },
   book(id) { return this.req('GET', '/api/books/' + id); },
-  createBook(b) { return this.req('POST', '/api/books', b); },
-  updateBook(id, b) { return this.req('PUT', '/api/books/' + id, b); },
-  deleteBook(id) { return this.req('DELETE', '/api/books/' + id); },
-  importBooks(fmt, mode, data) { return this.req('POST', '/api/books/import', { format: fmt, mode, data }); },
-  borrow(id) { return this.req('POST', '/api/borrow', { book_id: id }); },
-  cancelBorrow(id) { return this.req('POST', '/api/borrow/' + id + '/cancel'); },
-  retbook(id) { return this.req('POST', '/api/return/' + id); },
-  myBorrows() { return this.req('GET', '/api/my/borrows'); },
-  adminLoans(status) { return this.req('GET', '/api/admin/loans' + (status ? ('?status=' + encodeURIComponent(status)) : '')); },
-  approveLoan(id) { return this.req('POST', '/api/admin/loans/' + id + '/approve'); },
-  rejectLoan(id, reason) { return this.req('POST', '/api/admin/loans/' + id + '/reject', { reason }); },
-  pickupLoan(id) { return this.req('POST', '/api/admin/loans/' + id + '/pickup'); },
-  uploadCover(id, cover) { return this.req('POST', '/api/books/' + id + '/cover', { cover }); },
-  login(u, p) { return this.req('POST', '/api/auth/login', { username: u, password: p }); },
-  register(u, p, n, d, s) { return this.req('POST', '/api/auth/register', { username: u, password: p, name: n, dept: d, student_no: s }); },
-  me() { return this.req('GET', '/api/auth/me'); },
-  stats() { return this.req('GET', '/api/admin/stats'); },
-  readers() { return this.req('GET', '/api/admin/readers'); },
-  addReader(u, p, n, role, mb) { return this.req('POST', '/api/admin/readers', { username: u, password: p, name: n, role, max_borrow: mb }); },
-  updateReader(id, b) { return this.req('PUT', '/api/admin/readers/' + id, b); },
+  overview() { return this.req('GET', '/api/overview'); },
+  stars(p) { const qs = new URLSearchParams(p).toString(); return this.req('GET', '/api/stars?' + qs); },
+  works(p = {}) { const qs = new URLSearchParams(p).toString(); return this.req('GET', '/api/works' + (qs ? '?' + qs : '')); },
+  work(id) { return this.req('GET', '/api/works/' + id); },
+  posts(p = {}) { const qs = new URLSearchParams(p).toString(); return this.req('GET', '/api/posts' + (qs ? '?' + qs : '')); },
+  post(id) { return this.req('GET', '/api/posts/' + id); },
   ask(q) { return this.req('POST', '/api/ai/ask', { question: q }); },
   aiStatus() { return this.req('GET', '/api/ai/status'); },
   aiReset() { return this.req('POST', '/api/ai/reset', {}); },
   aiSearch(q, limit) { return this.req('GET', '/api/ai/search?q=' + encodeURIComponent(q) + '&limit=' + (limit || 8)); },
   digest(id) { return this.req('GET', '/api/ai/digest/' + id); },
-  overview() { return this.req('GET', '/api/overview'); },
-  activity(n) { return this.req('GET', '/api/activity' + (n ? ('?limit=' + n) : '')); },
-  stars(p) { const qs = new URLSearchParams(p).toString(); return this.req('GET', '/api/stars?' + qs); },
-  rankings() { return this.req('GET', '/api/rankings'); },
-  comments(id) { return this.req('GET', '/api/books/' + id + '/comments'); },
-  postComment(id, content) { return this.req('POST', '/api/books/' + id + '/comments', { content }); },
-  reviewInsights(id) { return this.req('GET', '/api/books/' + id + '/review-insights'); },
-  dh() { return this.req('GET', '/api/dh'); }
+  // ---- 管理端 ----
+  manageLogin(passcode) { return this.req('POST', '/api/manage/login', { passcode }); },
+  manageWorks() { return this.req('GET', '/api/manage/works'); },
+  saveWork(id, b) { return id ? this.req('PUT', '/api/manage/works/' + id, b) : this.req('POST', '/api/manage/works', b); },
+  deleteWork(id) { return this.req('DELETE', '/api/manage/works/' + id); },
+  managePosts() { return this.req('GET', '/api/manage/posts'); },
+  savePost(id, b) { return id ? this.req('PUT', '/api/manage/posts/' + id, b) : this.req('POST', '/api/manage/posts', b); },
+  deletePost(id) { return this.req('DELETE', '/api/manage/posts/' + id); },
+  upload(file, kind) {
+    const fd = new FormData();
+    fd.append('file', file);
+    const headers = {};
+    if (State.manageToken) headers['Authorization'] = 'Bearer ' + State.manageToken;
+    return fetch(apiUrl('/api/manage/upload?kind=' + encodeURIComponent(kind || 'file')), { method: 'POST', headers, body: fd })
+      .then(async r => {
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || '上传失败');
+        return d;
+      });
+  },
+  publish() { return this.req('POST', '/api/publish', {}); }
 };
+
+// 静态模式查询过滤（books 支持分页与检索；works/posts 支持 category/issue）
+function filterStatic(mapKey, url, data) {
+  const qs = new URLSearchParams(url.split('?')[1] || '');
+  if (mapKey === '/api/books') {
+    let list = data.books || [];
+    const q = (qs.get('q') || '').toLowerCase();
+    const cat = qs.get('category') || '';
+    if (cat) list = list.filter(b => b.category === cat);
+    if (q) list = list.filter(b => [b.title, b.author, b.tags, b.intro, b.call_no, b.isbn].some(x => String(x || '').toLowerCase().includes(q)));
+    const page = parseInt(qs.get('page') || '1', 10), pp = Math.min(parseInt(qs.get('pageSize') || '24', 10) || 24, 100);
+    const cats = [...new Set((data.books || []).map(b => b.category).filter(Boolean))];
+    return { total: list.length, page, pageSize: pp, books: list.slice((page - 1) * pp, page * pp), categories: cats };
+  }
+  if (mapKey === '/api/works') {
+    let list = data.works || [];
+    if (qs.get('issue')) list = list.filter(w => String(w.issue_no) === qs.get('issue'));
+    if (qs.get('code')) list = list.filter(w => w.code === qs.get('code'));
+    return { works: list, issues: data.issues || [] };
+  }
+  if (mapKey === '/api/posts') {
+    let list = data.posts || [];
+    if (qs.get('category')) list = list.filter(p => p.category === qs.get('category'));
+    return { posts: list };
+  }
+  return data;
+}
+
+// 摘星辰星辰代号库
+const STAR_CODES = ['北极星', '启明星', '织女星', '天狼星', '牵牛星', '东壁星', '心宿星', '文曲星', '北斗星', '南斗星', '轩辕星', '长庚星'];
+window.STAR_CODES = STAR_CODES;
+window.State = State;
 
 function renderNav() {
   const nav = document.getElementById('nav');
-  const user = document.getElementById('user-area');
+  const userArea = document.getElementById('user-area');
   const hash = location.hash || '#/home';
-  const u = State.user;
-  const isStaff = u && (u.role === '馆员' || u.role === '管理员');
-  const links = [['#/home', '星空首页']];
-  links.push(['#/rankings', '排行榜'], ['#/dh', '数字人文']);
-  if (u) links.push(['#/my', '我的借阅']);
-  if (isStaff) {
-    links.push(['#/admin', '数据看板'], ['#/screen', '数据大屏'], ['#/admin/loans', '审批台'], ['#/admin/catalog', '编目'], ['#/admin/import', '导入'], ['#/admin/readers', '读者']);
-  }
+  const links = [['#/home', '宇宙'], ['#/library', '书库'], ['#/stars', '摘星辰'], ['#/news', '资讯']];
   nav.innerHTML = links.map(([h, t]) => {
-    const isActive = hash === h || (h !== '#/admin' && hash.startsWith(h));
+    const isActive = hash === h || (h !== '#/home' && hash.startsWith(h));
     return `<a href="${h}" class="${isActive ? 'active' : ''}">${t}</a>`;
   }).join('')
     + `<button class="nav-theme" id="theme-btn" title="切换主题">🌙 深色</button>`
@@ -145,16 +231,7 @@ function renderNav() {
   if (themeBtn) { themeBtn.onclick = toggleTheme; updateThemeBtn(); }
   const navAi = document.getElementById('nav-ai');
   if (navAi) navAi.onclick = () => { if (window.AIWidget) AIWidget.toggle(); };
-
-  if (u) {
-    const ini = (u.name || u.username || '?').slice(0, 1);
-    user.innerHTML = `<div class="user-chip"><div class="avatar">${ini}</div>
-      <span>${u.name || u.username}</span><span class="role-badge">${u.role}</span></div>
-      <button class="btn ghost sm" id="logout">退出</button>`;
-    document.getElementById('logout').onclick = () => { State.clear(); renderNav(); location.hash = '#/home'; };
-  } else {
-    user.innerHTML = `<a class="btn ghost sm" href="#/login">登录</a><a class="btn sm" href="#/register">注册</a>`;
-  }
+  if (userArea) userArea.innerHTML = window.STATIC_MODE ? '' : `<a class="manage-link" href="#/manage" title="创始人管理入口">·</a>`;
 }
 
 function route() {
@@ -164,6 +241,7 @@ function route() {
   app.scrollTop = 0;
   if (window._screenTimer) { clearInterval(window._screenTimer); window._screenTimer = null; }
   if (window.Views && Views.cleanupStars) Views.cleanupStars();
+  if (window.Galaxy && Galaxy.destroy) Galaxy.destroy();
   const run = async (fn) => {
     try { await fn(); }
     catch (e) { app.innerHTML = `<div class="empty">加载失败：${e.message}<br><a href="#/home">返回首页</a></div>`; }
@@ -177,27 +255,12 @@ function route() {
   }
 
   if (hash.startsWith('#/book/')) return run(() => Views.bookDetail(hash.split('/')[2]));
-  if (hash === '#/login') return run(Views.login);
-  if (hash === '#/register') return run(Views.register);
-  if (hash === '#/admin-login') return run(Views.adminLogin);
-  if (hash === '#/rankings') return run(Views.rankings);
-  if (hash === '#/dh') return run(Views.dh);
-  if (hash === '#/draw') return run(async () => { await Views.home(); setTimeout(() => Views.openDraw(), 500); });
-  if (hash === '#/screen') {
-    if (!State.user || (State.user.role !== '馆员' && State.user.role !== '管理员')) { toast('需要馆员或管理员权限', 'err'); location.hash = '#/home'; return; }
-    return run(Views.screen);
-  }
-  if (hash === '#/my') { if (!State.user) { location.hash = '#/login'; return; } return run(Views.my); }
-  if (hash.startsWith('#/admin')) {
-    if (!State.user || (State.user.role !== '馆员' && State.user.role !== '管理员')) {
-      toast('需要馆员或管理员权限', 'err'); location.hash = '#/home'; return;
-    }
-    if (hash === '#/admin/catalog') return run(Views.adminCatalog);
-    if (hash === '#/admin/import') return run(Views.adminImport);
-    if (hash === '#/admin/readers') return run(Views.adminReaders);
-    if (hash === '#/admin/loans') return run(Views.adminLoans);
-    return run(Views.admin);
-  }
+  if (hash.startsWith('#/work/')) return run(() => Views.workDetail(hash.split('/')[2]));
+  if (hash.startsWith('#/post/')) return run(() => Views.postDetail(hash.split('/')[2]));
+  if (hash === '#/library') return run(Views.library);
+  if (hash === '#/stars') return run(Views.starsView);
+  if (hash === '#/news') return run(Views.news);
+  if (hash === '#/manage') return run(Views.manage);
   return run(Views.home);
 }
 
@@ -214,18 +277,20 @@ function updateThemeBtn() {
 
 async function boot() {
   applyTheme();
-  if (State.token) {
-    try { const r = await API.me(); State.user = r.user; } catch (e) { State.clear(); }
-  }
   renderNav();
-  AIWidget.init();
-  // AI 在线/离线状态（决定 fab 提示文案与导读能力）
-  API.aiStatus().then(r => {
+  // 静态版隐藏 AI 入口（无后端 AI 服务）
+  if (window.STATIC_MODE) {
     const fab = document.getElementById('ai-fab');
-    if (fab) fab.title = 'AI 助手（' + (r.online ? '真实模型在线' : '离线规则引擎') + '）';
-  }).catch(() => {});
+    if (fab) fab.style.display = 'none';
+  } else {
+    AIWidget.init();
+    API.aiStatus().then(r => {
+      const fab = document.getElementById('ai-fab');
+      if (fab) fab.title = 'AI 助手（' + (r.online ? '真实模型在线' : '离线规则引擎') + '）';
+    }).catch(() => {});
+  }
   window.addEventListener('hashchange', route);
-  // 全局委托：点击任意图书卡片 → 进入详情页（修复首页书籍点不开）
+  // 全局委托：点击任意图书卡片 → 进入详情页
   document.addEventListener('click', e => {
     const card = e.target.closest('.book-card');
     if (card && card.dataset.id) location.hash = '#/book/' + card.dataset.id;

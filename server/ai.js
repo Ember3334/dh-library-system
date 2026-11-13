@@ -1,10 +1,10 @@
 'use strict';
-// AI 馆员智能体（Agent）
+// AI 馆员智能体（Agent）· 数字人文平台版
 // 架构：意图识别 → 槽位抽取 → 工具调用（本机 SQLite 真实数据）→ 答案合成 → 可选 LLM 润色
 // 零 API 也能跑满能力；配置 LLM_API_URL + LLM_API_KEY 后自动升级为「工具增强大模型」
+// 无用户系统：仅检索 / 荐书 / 问答，不做借阅
 const db = require('./db');
 
-const BORROW_DAYS = 30;
 const HISTORY_TURNS = 8;
 const SESSION_TTL = 30 * 60 * 1000;
 const sessions = new Map();          // 会话记忆（进程内，重启即清空）
@@ -89,15 +89,10 @@ const INTENT_RULES = [
   ['greeting', /^(你好|您好|hi|hello|在吗|嗨|哈喽|早上好|晚上好|中午好)/i],
   ['thanks', /(谢谢|感谢|多谢|thx|thanks|辛苦了)/i],
   ['who', /(你是谁|你叫什么|什么模型|你能做什么|你会什么|能干什么|有什么功能|能力)/],
-  ['borrow', /(帮我借|帮我校|我要借|我想借|申请借|借阅一下|借一下|去借|借给|借《|借这本|借那本|办理借阅|把.*借了|借.*这本书|办个借)/],
-  ['return_book', /(帮我还|我要还|还《|还掉|办理归还|还书|把.*还了|归还.*这本|还.*这本书)/],
-  ['my_borrows', /(我借|我的借阅|借了|还了没|到期|什么时候还|我的书|我还|借阅记录)/],
-  ['overdue', /(逾期|超期|滞纳|罚款|过期)/],
   ['stats', /(多少本|馆藏|总共有|统计|分类分布|占比|数据概况|规模|一共有)/],
   ['category', /(有哪些分类|分类有哪些|几个分类|什么分类|分类情况|分类列表|分类都有)/],
   ['hot', /(热门|最火|大家都在|排行榜|借阅最多|流行|最受欢迎|top)/i],
   ['similar', /(类似|相似|同类|差不多|同类型|差不多|像.*一样|相关的书)/],
-  ['opinion', /(口碑|评价|怎么样|好不好|值得读|评分|读后感|书评)/],
   ['digest', /(讲什么|内容|简介|导读|概括|大意|摘要|说了什么|主要讲|介绍)/],
   ['availability', /(在馆|馆藏位置|在哪个|放哪|索书号|还有.*本|能不能借|能借吗|可以借吗|借吗|借得到|有货|库存|在哪)/],
   ['recommend', /(推荐|建议|看什么|适合|有什么好|给我找|想看|来几本|书单|读什么)/],
@@ -142,18 +137,6 @@ function dedupe(rows) {
   return [...seen.values()];
 }
 
-function borrowCounts() {
-  const m = {};
-  db.prepare('SELECT book_id, COUNT(*) c FROM borrows GROUP BY book_id').all().forEach(r => { m[r.book_id] = r.c; });
-  return m;
-}
-function commentStats() {
-  const m = {};
-  db.prepare('SELECT book_id, COUNT(*) c, AVG(sentiment) s FROM comments GROUP BY book_id').all()
-    .forEach(r => { m[r.book_id] = { n: r.c, avg: r.s }; });
-  return m;
-}
-
 // --- 检索：多字段加权打分 + 二元组召回兜底 ---
 function searchBooks(q, opts = {}) {
   const limit = opts.limit || 8;
@@ -169,8 +152,6 @@ function searchBooks(q, opts = {}) {
     ts.forEach(t => { const l = `%${t}%`; cols.forEach(() => params.push(l)); });
     return db.prepare(`SELECT ${F} FROM books WHERE ${cond.join(' OR ')}`).all(...params);
   };
-  const counts = borrowCounts();
-  const cmts = commentStats();
   const full = String(q).replace(/[《》\s]/g, '').toLowerCase();
   const score = (b, ts, core) => {
     const title = (b.title || '').toLowerCase();
@@ -191,8 +172,6 @@ function searchBooks(q, opts = {}) {
       if (low.some(t => t && pub.includes(t))) s += 2;
       if (low.some(t => t && intro.includes(t))) s += 1.2;
     }
-    s += (counts[b.id] || 0) * 0.4;
-    s += ((cmts[b.id] && cmts[b.id].avg) || 0) * 1.5;
     if (b.available > 0) s += 1.5;
     return s;
   };
@@ -224,29 +203,15 @@ function findBook(q) {
   return hit[0] || null;
 }
 
-function recommend(uid, limit = 5, opts = {}) {
-  const profileTags = new Set(), profileCats = new Set(), borrowed = new Set();
-  if (uid) {
-    db.prepare('SELECT b.* FROM borrows r JOIN books b ON b.id=r.book_id WHERE r.user_id=?').all(uid)
-      .forEach(b => {
-        borrowed.add(b.id);
-        (b.tags || '').split(',').forEach(t => t.trim() && profileTags.add(t.trim()));
-        if (b.category) profileCats.add(b.category);
-      });
-  }
-  const counts = borrowCounts(), cmts = commentStats();
+function recommend(limit = 5, opts = {}) {
   const exclude = opts.exclude ? new Set(opts.exclude) : new Set();
   const pool = db.prepare(`SELECT ${F} FROM books`).all();
   const scored = pool.map(b => {
     let s = 0;
-    (b.tags || '').split(',').map(t => t.trim()).filter(Boolean).forEach(t => { if (profileTags.has(t)) s += 3; });
-    if (profileCats.has(b.category)) s += 2.5;
-    s += (counts[b.id] || 0) * 0.5;
-    s += ((cmts[b.id] && cmts[b.id].avg) || 0) * 2;
     if (b.available > 0) s += 1.5;
     s += Math.random() * 0.8;                    // 打散，保证「换一批」有变化
     return { b, s };
-  }).filter(x => !borrowed.has(x.b.id) && !exclude.has(x.b.id) && x.b.available > 0);
+  }).filter(x => !exclude.has(x.b.id));
   scored.sort((a, b) => b.s - a.s);
   return dedupe(scored.map(x => x.b)).slice(0, limit);
 }
@@ -255,14 +220,12 @@ function similarBooks(bookId, limit = 6) {
   const b = db.prepare(`SELECT ${F} FROM books WHERE id=?`).get(bookId);
   if (!b) return [];
   const tags = new Set((b.tags || '').split(',').map(t => t.trim()).filter(Boolean));
-  const counts = borrowCounts();
   const pool = db.prepare(`SELECT ${F} FROM books WHERE id<>?`).all(bookId);
   const scored = pool.map(x => {
     let s = 0;
     if (x.category === b.category) s += 4;
     if (b.author && x.author === b.author) s += 5;
     (x.tags || '').split(',').map(t => t.trim()).filter(Boolean).forEach(t => { if (tags.has(t)) s += 2.5; });
-    s += (counts[x.id] || 0) * 0.3;
     if (x.available > 0) s += 1;
     return { x, s };
   }).filter(o => o.s > 0).sort((p, q) => q.s - p.s);
@@ -273,83 +236,33 @@ function booksByAuthor(author, limit = 8) {
   return dedupe(db.prepare(`SELECT ${F} FROM books WHERE author LIKE ?`).all(`%${author}%`)).slice(0, limit);
 }
 function booksByCategory(cat, limit = 8, onlyAvailable = false) {
-  const counts = borrowCounts();
   const rows = db.prepare(`SELECT ${F} FROM books WHERE category=?`).all(cat);
   const list = rows.filter(b => !onlyAvailable || b.available > 0)
-    .map(b => ({ b, s: (counts[b.id] || 0) + (b.available > 0 ? 1 : 0) + Math.random() }))
+    .map(b => ({ b, s: (b.available > 0 ? 1 : 0) + Math.random() }))
     .sort((a, b) => b.s - a.s);
   return dedupe(list.map(x => x.b)).slice(0, limit);
 }
 function hotBooks(limit = 8, cat = null) {
-  const rows = db.prepare(`SELECT ${F}, (SELECT COUNT(*) FROM borrows r WHERE r.book_id=books.id) c
-    FROM books ${cat ? 'WHERE category=?' : ''} ORDER BY c DESC, available DESC LIMIT ?`)
+  // 无用户系统、无借阅流水：「热门」改为「新上架」——按入库时间倒序
+  const rows = db.prepare(`SELECT ${F} FROM books ${cat ? 'WHERE category=?' : ''} ORDER BY id DESC LIMIT ?`)
     .all(...(cat ? [cat, limit] : [limit]));
   return dedupe(rows).slice(0, limit);
 }
 function libraryStats() {
   const t = db.prepare('SELECT COUNT(*) kinds, COALESCE(SUM(total),0) copies, COALESCE(SUM(available),0) avail FROM books').get();
   const cats = db.prepare("SELECT category, COUNT(*) c, COALESCE(SUM(total),0) t FROM books WHERE category IS NOT NULL AND category<>'' GROUP BY category ORDER BY c DESC").all();
-  const onloan = db.prepare("SELECT COUNT(*) c FROM borrows WHERE status IN ('借出','逾期','待取书')").get().c;
-  const overdue = db.prepare("SELECT COUNT(*) c FROM borrows WHERE status='逾期'").get().c;
-  const readers = db.prepare("SELECT COUNT(*) c FROM users WHERE role='读者'").get().c;
-  const cmts = db.prepare('SELECT COUNT(*) c FROM comments').get().c;
-  return { kinds: t.kinds, copies: t.copies, avail: t.avail, cats, onloan, overdue, readers, comments: cmts };
+  const works = db.prepare('SELECT COUNT(*) c FROM works WHERE visible=1').get().c;
+  const posts = db.prepare('SELECT COUNT(*) c FROM posts WHERE visible=1').get().c;
+  return { kinds: t.kinds, copies: t.copies, avail: t.avail, cats, works, posts };
 }
-function myBorrows(uid) {
-  if (!uid) return null;
-  const rows = db.prepare(`SELECT b.id,b.title,b.author,b.call_no,r.status,r.borrow_date,r.due_date,r.return_date
-    FROM borrows r JOIN books b ON b.id=r.book_id WHERE r.user_id=? ORDER BY r.id DESC LIMIT 20`).all(uid);
-  const now = Date.now();
-  return rows.map(r => ({ ...r, daysLeft: r.due_date ? Math.ceil((new Date(r.due_date.replace(' ', 'T')) - now) / 86400000) : null }));
-}
-function reviewsOf(bookId) {
-  const rows = db.prepare('SELECT user_name,content,sentiment,tags FROM comments WHERE book_id=? ORDER BY id DESC LIMIT 5').all(bookId);
-  const agg = db.prepare('SELECT COUNT(*) n, AVG(sentiment) avg FROM comments WHERE book_id=?').get(bookId);
-  return { rows, n: agg.n || 0, avg: agg.avg || 0 };
-}
-
-// 执行类动作：提交借阅申请 / 归还（与 /api/borrow、/api/return 同源逻辑，供 AI agent 落地调用）
-function doBorrow(uid, bookId) {
-  if (!uid) return { error: '请先登录读者账号，我才能帮你借书。' };
-  const user = db.prepare('SELECT * FROM users WHERE id=?').get(uid);
-  if (!user) return { error: '账号不存在，请重新登录。' };
-  if (user.role !== '读者') return { error: `当前账号为「${user.role}」，只有读者账号可以借阅。` };
-  const book = db.prepare(`SELECT ${F} FROM books WHERE id=?`).get(bookId);
-  if (!book) return { error: '馆藏里没找到这本书。' };
-  if (book.available <= 0) return { error: `《${book.title}》库存为 0，暂不可借（可等归还或联系馆员）。` };
-  const active = db.prepare("SELECT COUNT(*) c FROM borrows WHERE user_id=? AND status IN ('待审批','待取书','借出','逾期')").get(uid).c;
-  if (active >= user.max_borrow) return { error: `你的借阅额度已满（最多 ${user.max_borrow} 本），请先归还部分图书。` };
-  const same = db.prepare("SELECT id FROM borrows WHERE user_id=? AND book_id=? AND status IN ('待审批','待取书','借出','逾期')").get(uid, bookId);
-  if (same) return { error: `你已在借阅或申请《${book.title}》，无需重复。` };
-  const due = db.prepare(`SELECT datetime('now','+${BORROW_DAYS} days') d`).get().d;
-  const info = db.prepare(`INSERT INTO borrows (user_id,book_id,due_date,status,request_date) VALUES (?,?,?,'待审批',datetime('now'))`).run(uid, bookId, due);
-  return { record: db.prepare('SELECT * FROM borrows WHERE id=?').get(info.lastInsertRowid), book };
-}
-function doReturn(uid, bookId) {
-  if (!uid) return { error: '请先登录读者账号，我才能帮你还书。' };
-  const book = db.prepare(`SELECT ${F} FROM books WHERE id=?`).get(bookId);
-  if (!book) return { error: '馆藏里没找到这本书。' };
-  const rec = db.prepare("SELECT * FROM borrows WHERE user_id=? AND book_id=? AND status IN ('借出','逾期','待取书') ORDER BY id DESC LIMIT 1").get(uid, bookId);
-  if (!rec) return { error: `没有找到《${book.title}》的进行中借阅记录（也许已归还，或尚未借出）。` };
-  db.prepare("UPDATE borrows SET status='已还', return_date=datetime('now') WHERE id=?").run(rec.id);
-  db.prepare('UPDATE books SET available=available+1 WHERE id=?').run(bookId);
-  return { book, wasOverdue: rec.status === '逾期' };
-}
-
 // ==========================================================
 // 三、规则知识库
 // ==========================================================
 const RULES = [
-  { kw: ['借期', '多久', '几天', '多长时间'], ans: `每本书默认借阅期为 ${BORROW_DAYS} 天。进入「我的借阅」可看到每本书的应还日期与剩余天数。`, chips: ['我借了哪些书？', '怎么续借？'] },
-  { kw: ['逾期', '超期', '罚款', '罚', '滞纳'], ans: '逾期会标记在「我的借阅」并影响后续借阅权限。请尽快到服务台归还，滞纳金规则以图书室公示为准。', chips: ['我的借阅', '怎么还书？'] },
-  { kw: ['续借', '延长'], ans: '在到期前联系馆员或服务台办理续借；系统里由馆员在审批台操作。', chips: ['怎么借书？', '馆员联系方式'] },
-  { kw: ['几本', '额度', '上限', '能借', '最多'], ans: '读者默认最多同时借阅 5 本。在「我的借阅」可查看已借数量与剩余额度。', chips: ['我的借阅', '推荐几本书'] },
-  { kw: ['注册', '账号', '开户', '登录'], ans: '首页右上角「注册」用学号/邮箱创建读者账号即可借阅；馆员与管理员账号由系统统一开通。', chips: ['怎么借书？'] },
-  { kw: ['开放', '时间', '几点', '营业'], ans: '图书室开放时间以学院公告为准；系统 7×24 小时支持检索、预约与借阅记录查询。' },
-  { kw: ['怎么借', '如何借', '借书流程'], ans: '搜到书 → 进入详情页 → 点「借阅」→ 馆员审批 → 到服务台取书。额度已满或库存为 0 时无法借阅。', chips: ['推荐几本书', '借期是多久？'] },
-  { kw: ['还书', '归还', '怎么还'], ans: '到服务台归还，或由馆员在后台点「归还」。归还后记录更新为「已还」。' },
-  { kw: ['密码', '忘记'], ans: '读者密码请妥善保管；遗忘请联系馆员重置。' },
-  { kw: ['qq', '群', '联系', '客服', '电话', '组委会'], ans: '大赛官方 QQ 群：705263206；赛事咨询详见大赛通知。' },
+  { kw: ['摘星辰', '星辰计划', '星辰代号'], ans: '「摘星辰」是数文拾光协会的周期性可视化实践活动：每周一期，小组实操产出小型数字人文作品，每件作品带专属星辰代号（北极星/启明星/织女星/天狼星/牵牛星等）。成果都在「摘星辰」版块陈列。', chips: ['去摘星辰版块', '平台有哪些版块'] },
+  { kw: ['版块', '平台', '数字人文平台', '能做什么'], ans: '本平台是数字人文综合展示平台，含四大版块：宇宙首页（3D 星系导航）、书库（学院真实馆藏）、摘星辰（社团可视化成果）、资讯（专业动态与学习资源）。', chips: ['推荐几本书', '摘星辰是什么'] },
+  { kw: ['开放', '时间', '几点', '营业'], ans: '本平台 7×24 小时在线，可随时检索馆藏、浏览作品与资讯。' },
+  { kw: ['qq', '群', '联系', '客服', '电话', '组委会'], ans: '社团相关事宜请联系数文拾光协会；本平台内容由创始人统一维护。' },
   { kw: ['数字人文', '什么是', '数文'], ans: '数字人文是用计算技术研究与呈现人文知识的交叉学科，涵盖文本挖掘、GIS、知识图谱、数字馆藏等。我可以直接帮你找相关馆藏。', chips: ['推荐数字人文的书', '有哪些分类？'] }
 ];
 function matchRule(q) { for (const r of RULES) if (r.kw.some(k => q.includes(k))) return r; return null; }
@@ -357,9 +270,9 @@ function matchRule(q) { for (const r of RULES) if (r.kw.some(k => q.includes(k))
 // ==========================================================
 // 四、会话记忆
 // ==========================================================
-function sessionKey(uid) { return uid ? ('u' + uid) : 'anon'; }
-function getSession(uid) {
-  const k = sessionKey(uid);
+function sessionKey() { return 'anon'; }
+function getSession() {
+  const k = sessionKey();
   let s = sessions.get(k);
   if (!s || Date.now() - s.ts > SESSION_TTL) {
     s = { turns: [], lastPool: [], poolOffset: 0, lastBooks: [], lastIntent: null, lastTool: null, ts: Date.now() };
@@ -368,9 +281,9 @@ function getSession(uid) {
   s.ts = Date.now();
   return s;
 }
-function resetSession(uid) { sessions.delete(sessionKey(uid)); }
-function remember(uid, q, answer, extra = {}) {
-  const s = getSession(uid);
+function resetSession() { sessions.delete(sessionKey()); }
+function remember(q, answer, extra = {}) {
+  const s = getSession();
   s.turns.push({ q, a: (answer.reply || '').slice(0, 160), intent: answer.intent });
   if (s.turns.length > HISTORY_TURNS) s.turns.shift();
   if (extra.pool && extra.pool.length) { s.lastPool = extra.pool; s.poolOffset = extra.offset || 0; }
@@ -419,52 +332,34 @@ async function llmChat(messages, opts = {}) {
 // 供 LLM 使用的工具声明
 const TOOL_SPECS = [
   { name: 'search', desc: '按关键词检索馆藏图书', args: { keywords: '关键词，空格分隔' } },
-  { name: 'recommend', desc: '结合读者借阅历史做个性化推荐', args: {} },
+  { name: 'recommend', desc: '推荐馆藏图书', args: {} },
   { name: 'similar', desc: '找与某本书相似的图书', args: { book: '书名' } },
   { name: 'byCategory', desc: '列出某个分类的图书', args: { category: '分类名' } },
-  { name: 'hot', desc: '借阅热门榜', args: {} },
-  { name: 'stats', desc: '馆藏与借阅数据统计', args: {} },
-  { name: 'myBorrows', desc: '查询当前读者的借阅记录与到期情况', args: {} },
-  { name: 'availability', desc: '查某本书的库存、索书号与馆藏位置', args: { book: '书名' } },
-  { name: 'reviews', desc: '查某本书的读者评价与口碑', args: { book: '书名' } },
-  { name: 'borrow', desc: '为当前登录读者提交借阅申请（需读者账号）', args: { book: '书名' } },
-  { name: 'returnBook', desc: '为当前登录读者归还某本在借图书（需读者账号）', args: { book: '书名' } }
+  { name: 'hot', desc: '新上架精选', args: {} },
+  { name: 'stats', desc: '馆藏与平台内容统计', args: {} },
+  { name: 'availability', desc: '查某本书的馆藏位置与册数', args: { book: '书名' } }
 ];
 function runToolByName(name, args, ctx) {
   switch (name) {
     case 'search': return { books: shapeAll(searchBooks(args.keywords || '', { limit: 8 })) };
-    case 'recommend': return { books: shapeAll(recommend(ctx.uid, 5)) };
+    case 'recommend': return { books: shapeAll(recommend(5)) };
     case 'similar': { const b = findBook(args.book || ''); return b ? { books: shapeAll(similarBooks(b.id, 6)), anchor: shape(b) } : {}; }
     case 'byCategory': return { books: shapeAll(booksByCategory(args.category || '', 8)) };
     case 'hot': return { books: shapeAll(hotBooks(8)) };
     case 'stats': return { stats: libraryStats() };
-    case 'myBorrows': return { borrows: myBorrows(ctx.uid) };
     case 'availability': { const b = findBook(args.book || ''); return b ? { books: [shape(b)] } : {}; }
-    case 'reviews': { const b = findBook(args.book || ''); return b ? { anchor: shape(b), reviews: reviewsOf(b.id) } : {}; }
-    case 'borrow': { const b = findBook(args.book || ''); if (!b) return {}; const r = doBorrow(ctx.uid, b.id); return r.error ? { error: r.error } : { books: [shape(r.book)], borrowed: shape(r.book) }; }
-    case 'returnBook': { const b = findBook(args.book || ''); if (!b) return {}; const r = doReturn(ctx.uid, b.id); return r.error ? { error: r.error } : { books: [shape(r.book)], returned: shape(r.book) }; }
     default: return {};
   }
 }
 function toolResultToText(r) {
   const parts = [];
-  if (r.books && r.books.length) parts.push('图书：' + r.books.map(b => `《${b.title}》${b.author ? '（' + b.author + '）' : ''}[${b.category || '未分类'}]${b.available > 0 ? '可借' : '已借完'}${b.location ? '位置' + b.location : ''}`).join('；'));
+  if (r.books && r.books.length) parts.push('图书：' + r.books.map(b => `《${b.title}》${b.author ? '（' + b.author + '）' : ''}[${b.category || '未分类'}]${b.location ? '位置' + b.location : ''}`).join('；'));
   if (r.error) parts.push('⚠️ ' + r.error);
-  if (r.borrowed) parts.push('已提交借阅申请：《' + r.borrowed.title + '》');
-  if (r.returned) parts.push('已归还：《' + r.returned.title + '》');
-  if (r.anchor) parts.push('目标书：' + `《${r.anchor.title}》${r.anchor.author || ''}｜${r.anchor.category || ''}｜馆藏${r.anchor.available}/${r.anchor.total}${r.anchor.location ? '｜位置' + r.anchor.location : ''}`);
+  if (r.anchor) parts.push('目标书：' + `《${r.anchor.title}》${r.anchor.author || ''}｜${r.anchor.category || ''}｜共 ${r.anchor.total} 册${r.anchor.location ? '｜位置' + r.anchor.location : ''}`);
   if (r.stats) {
     const s = r.stats;
-    parts.push(`馆藏：${s.kinds} 种 / ${s.copies} 册，可借 ${s.avail} 册；在借 ${s.onloan}，逾期 ${s.overdue}；读者 ${s.readers} 人；书评 ${s.comments} 条。分类：` +
+    parts.push(`馆藏：${s.kinds} 种 / ${s.copies} 册；摘星辰作品 ${s.works} 件，资讯 ${s.posts} 条。分类：` +
       s.cats.map(c => `${c.category} ${c.c} 种`).join('、'));
-  }
-  if (r.borrows) {
-    if (!r.borrows.length) parts.push('该读者当前没有借阅记录。');
-    else parts.push('借阅记录：' + r.borrows.map(b => `《${b.title}》${b.status}${b.daysLeft !== null ? ('，' + (b.daysLeft >= 0 ? '还剩' + b.daysLeft + '天' : '已逾期' + (-b.daysLeft) + '天')) : ''}`).join('；'));
-  }
-  if (r.reviews) {
-    if (!r.reviews.n) parts.push('该书暂无书评。');
-    else parts.push(`书评 ${r.reviews.n} 条，平均情感分 ${r.reviews.avg.toFixed(2)}（满分 1）：` + r.reviews.rows.map(x => x.content).slice(0, 3).join(' / '));
   }
   return parts.join('\n') || '（无结果）';
 }
@@ -472,7 +367,7 @@ function toolResultToText(r) {
 // ==========================================================
 // 六、答案合成（离线大脑）
 // ==========================================================
-const CHIPS_DEFAULT = ['推荐几本书', '馆藏有多少本书？', '热门榜', '我借了哪些书？'];
+const CHIPS_DEFAULT = ['推荐几本书', '馆藏有多少本书？', '新上架', '摘星辰是什么'];
 
 function fmtBooks(books) {
   return books.map((b, i) => `${i + 1}. 《${b.title}》${b.author ? ' · ' + b.author : ''}${b.category ? ' · ' + b.category : ''}${b.available > 0 ? '' : ' · 已借完'}`).join('\n');
@@ -490,19 +385,18 @@ function toolSearch(slots, q) {
   if (!books.length) return null;
   const scope = [slots.category, slots.author, slots.year].filter(Boolean).join(' / ');
   return {
-    reply: `为你找到 ${books.length} 本${scope ? '（' + scope + '）' : ''}相关馆藏：\n${fmtBooks(books)}\n回复「第 N 本」可以看详情，或点卡片直接借阅。`,
+    reply: `为你找到 ${books.length} 本${scope ? '（' + scope + '）' : ''}相关馆藏：\n${fmtBooks(books)}\n回复「第 N 本」可以看详情，或点卡片直达。`,
     books: shapeAll(books), pool, offset: books.length,
-    chips: ['换一批', '有没有可借的？', '热门榜'],
+    chips: ['换一批', '介绍一下第 1 本', '馆藏统计'],
     intent: 'search'
   };
 }
-function toolRecommend(slots, uid, exclude) {
+function toolRecommend(slots, exclude) {
   const n = slots.limit || 5;
-  const books = slots.category ? booksByCategory(slots.category, n, true) : recommend(uid, n, { exclude });
+  const books = slots.category ? booksByCategory(slots.category, n) : recommend(n, { exclude });
   if (!books.length) return null;
-  const who = uid ? '结合你的借阅偏好' : '按馆藏热度与口碑';
   return {
-    reply: `${who}，为你推荐 ${books.length} 本：\n${fmtBooks(books)}`,
+    reply: `为你推荐 ${books.length} 本馆藏：\n${fmtBooks(books)}`,
     books: shapeAll(books), pool: books.map(b => b.id), offset: books.length,
     chips: ['换一批', '还有类似的吗？', '馆藏统计'], intent: 'recommend'
   };
@@ -515,16 +409,14 @@ function toolSimilar(slots, forceBook) {
   return {
     reply: `与《${b.title}》（${b.category || '未分类'}）相近的馆藏：\n${fmtBooks(sim)}`,
     books: shapeAll(sim), pool: sim.map(x => x.id), offset: sim.length,
-    chips: ['换一批', `介绍一下《${b.title}》`, '热门榜'], intent: 'similar'
+    chips: ['换一批', `介绍一下《${b.title}》`, '新上架'], intent: 'similar'
   };
 }
 function toolHot(slots) {
   const books = hotBooks(slots.limit || 8, slots.category);
   if (!books.length) return null;
-  const rows = db.prepare(`SELECT b.title, COUNT(*) c FROM borrows r JOIN books b ON b.id=r.book_id GROUP BY b.id ORDER BY c DESC LIMIT 20`).all();
-  const top = rows.slice(0, 5).map((r, i) => `${i + 1}. 《${r.title}》累计借出 ${r.c} 次`).join('\n');
   return {
-    reply: `近期借阅热门（按累计借出次数）：\n${top}\n以下是热门且当前可优先借阅的馆藏：`,
+    reply: '最近新上架的馆藏：\n' + fmtBooks(shapeAll(books)),
     books: shapeAll(books), pool: books.map(b => b.id), offset: books.length,
     chips: ['推荐几本书', '馆藏统计'], intent: 'hot'
   };
@@ -533,31 +425,15 @@ function toolStats() {
   const s = libraryStats();
   const cats = s.cats.map(c => `· ${c.category}：${c.c} 种 / ${c.t} 册`).join('\n');
   return {
-    reply: `数文图书室当前馆藏概况：\n· 图书 ${s.kinds} 种，共 ${s.copies} 册，可借 ${s.avail} 册\n· 在借 ${s.onloan} 册，逾期 ${s.overdue} 册\n· 注册读者 ${s.readers} 人，累计书评 ${s.comments} 条\n分类分布：\n${cats}`,
-    books: [], chips: ['推荐几本书', '热门榜', '有哪些分类？'], intent: 'stats'
+    reply: `数字人文平台内容概况：\n· 馆藏图书 ${s.kinds} 种，共 ${s.copies} 册\n· 摘星辰作品 ${s.works} 件 · 资讯 ${s.posts} 条\n分类分布：\n${cats}`,
+    books: [], chips: ['推荐几本书', '新上架', '有哪些分类？'], intent: 'stats'
   };
-}
-function toolMyBorrows(uid) {
-  const rows = myBorrows(uid);
-  if (!rows) return { reply: '登录后我才能查到你的借阅记录哦～ 点右上角「登录」即可。', books: [], intent: 'my_borrows', chips: ['怎么登录？'] };
-  const live = rows.filter(r => r.status === '借出' || r.status === '逾期' || r.status === '待取书' || r.status === '待审批');
-  if (!live.length) return { reply: '你当前没有在借的图书。想让我推荐几本吗？', books: shapeAll(recommend(uid, 3)), intent: 'my_borrows', chips: ['推荐几本书'] };
-  const fmtStatus = (r) => {
-    if (r.status === '待审批') return '⏳ 待馆员审批';
-    if (r.status === '待取书') return '📦 待取书';
-    if (r.status === '借出' && r.daysLeft !== null) return '📖 借出 · ' + (r.daysLeft >= 0 ? '还剩 ' + r.daysLeft + ' 天' : '已逾期 ' + (-r.daysLeft) + ' 天');
-    if (r.status === '借出') return '📖 借出';
-    if (r.status === '逾期') return '⚠️ 逾期 ' + (-r.daysLeft) + ' 天';
-    return r.status;
-  };
-  const txt = live.map(r => `· 《${r.title}》${fmtStatus(r)}`).join('\n');
-  return { reply: `你有 ${live.length} 条借阅（含待审批）：\n${txt}\n⏳ 待审批需馆员确认后到馆取书；逾期请尽快归还～`, books: [], intent: 'my_borrows', chips: ['怎么还书？', '借期是多久？'] };
 }
 function toolAvailability(slots, forceBook) {
   const b = forceBook || findBook(slots.titles[0] || slots.clean);
   if (!b) return null;
   return {
-    reply: `《${b.title}》${b.author ? '（' + b.author + '）' : ''}\n· 索书号：${b.call_no || '—'}\n· 馆藏位置：${b.location || '—'}\n· 库存：可借 ${b.available} / 共 ${b.total} 册\n${b.available > 0 ? '现在可以借，去详情页点「借阅」即可。' : '当前已全部借出，可稍后再来看看。'}`,
+    reply: `《${b.title}》${b.author ? '（' + b.author + '）' : ''}\n· 索书号：${b.call_no || '—'}\n· 馆藏位置：${b.location || '—'}\n· 馆藏共 ${b.total} 册\n可到「书库」查看详情与 AI 导读。`,
     books: [shape(b)], intent: 'availability', chips: ['还有类似的吗？', '推荐几本书']
   };
 }
@@ -565,24 +441,11 @@ function toolDigest(slots, forceBook) {
   const b = forceBook || findBook(slots.titles[0] || slots.clean);
   if (!b) return null;
   const rel = similarBooks(b.id, 4);
-  const rv = reviewsOf(b.id);
   const intro = (b.intro || '').trim() || '馆藏暂未录入官方简介，可从目录与章节入手。';
   const tags = (b.tags || '').split(',').filter(Boolean);
-  const rev = rv.n ? `\n馆内书评 ${rv.n} 条，平均口碑 ${rv.avg.toFixed(2)}/1；代表性评价：「${rv.rows[0].content}」` : '';
   return {
-    reply: `《${b.title}》${b.author ? ' · ' + b.author : ''}（${b.category || '未分类'}${b.publisher ? ' · ' + b.publisher : ''}${b.year ? ' · ' + b.year : ''}）\n${intro}${tags.length ? '\n关键词：' + tags.join('、') : ''}${rev}\n可借 ${b.available}/${b.total} 册${b.location ? '，位置 ' + b.location : ''}。`,
-    books: shapeAll(rel), intent: 'digest', chips: ['还有类似的吗？', '现在能借吗？', '推荐几本书']
-  };
-}
-function toolOpinion(slots, forceBook) {
-  const b = forceBook || findBook(slots.titles[0] || slots.clean);
-  if (!b) return null;
-  const rv = reviewsOf(b.id);
-  if (!rv.n) return { reply: `《${b.title}》暂时还没有读者书评。它属于「${b.category || '未分类'}」${b.author ? '，作者' + b.author : ''}，可借 ${b.available}/${b.total} 册。`, books: [shape(b)], intent: 'opinion', chips: ['还有类似的吗？'] };
-  const verdict = rv.avg >= 0.8 ? '口碑很好' : rv.avg >= 0.6 ? '口碑不错' : rv.avg >= 0.4 ? '口碑一般' : '争议较大';
-  return {
-    reply: `《${b.title}》共有 ${rv.n} 条读者书评，平均情感分 ${rv.avg.toFixed(2)}（满分 1），整体${verdict}。\n代表性评价：\n${rv.rows.map(r => '· ' + r.content).join('\n')}`,
-    books: [shape(b)], intent: 'opinion', chips: ['介绍一下这本书', '还有类似的吗？']
+    reply: `《${b.title}》${b.author ? ' · ' + b.author : ''}（${b.category || '未分类'}${b.publisher ? ' · ' + b.publisher : ''}${b.year ? ' · ' + b.year : ''}）\n${intro}${tags.length ? '\n关键词：' + tags.join('、') : ''}\n馆藏共 ${b.total} 册${b.location ? '，位置 ' + b.location : ''}。`,
+    books: shapeAll(rel), intent: 'digest', chips: ['还有类似的吗？', '推荐几本书']
   };
 }
 function toolCategory(slots) {
@@ -605,36 +468,37 @@ function toolCategory(slots) {
 const PERSONA = '你是「数智馆员小文」，贵州师范大学数字人文学院图书室的 AI 馆员。';
 
 // 兜底：明确告诉用户没找到，并给出可用入口
-function fallbackAnswer(uid, slots) {
+function fallbackAnswer(slots) {
   const want = (slots && slots.titles && slots.titles[0]) || '';
   if (want) {
     const near = searchBooks(want, { limit: 3 });
     if (near.length) return {
-      reply: `馆藏里没有《${want}》这本。相近的有：\n${fmtBooks(shapeAll(near))}`,
+      reply: `馆藏里没有《${want}》这本。相近的有：
+${fmtBooks(shapeAll(near))}`,
       books: shapeAll(near), intent: 'fallback', chips: ['推荐几本书', '馆藏统计']
     };
     return {
       reply: `馆藏里暂时没有《${want}》。换个书名或作者再试试？也可以让我按分类推荐。`,
-      books: shapeAll(recommend(uid, 3)), intent: 'fallback', chips: ['推荐几本书', '有哪些分类？']
+      books: shapeAll(recommend(3)), intent: 'fallback', chips: ['推荐几本书', '有哪些分类？']
     };
   }
   return {
-    reply: '没找到完全匹配的馆藏。你可以这样问我：\n· 「推荐几本历史的书」\n· 「《XXX》在哪、能借吗」\n· 「馆藏有多少本书」\n· 「我借了哪些书」',
-    books: shapeAll(recommend(uid, 3)), intent: 'fallback', chips: CHIPS_DEFAULT
+    reply: '没找到完全匹配的馆藏。你可以这样问我：\n· 「推荐几本历史的书」\n· 「《XXX》的简介和馆藏位置」\n· 「馆藏有多少本书」\n· 「摘星辰是什么」',
+    books: shapeAll(recommend(3)), intent: 'fallback', chips: CHIPS_DEFAULT
   };
 }
 
 function smalltalk(kind) {
-  if (kind === 'greeting') return { reply: '你好呀～ 我是小文，数文图书室的 AI 馆员。找书、荐书、查借阅、问规则，都可以直接问我。', books: [], intent: 'greeting', chips: ['推荐几本书', '馆藏有多少本书？', '我借了哪些书？'] };
+  if (kind === 'greeting') return { reply: '你好呀～ 我是小文，数字人文平台的 AI 馆员。找书、荐书、问平台版块，都可以直接问我。', books: [], intent: 'greeting', chips: ['推荐几本书', '馆藏有多少本书？', '摘星辰是什么'] };
   if (kind === 'thanks') return { reply: '不客气～ 还要找别的书随时叫我。', books: [], intent: 'thanks', chips: ['推荐几本书'] };
   return {
-    reply: '我是数智馆员小文，能做的事：\n· 检索馆藏（书名 / 作者 / 标签 / 索书号）\n· 个性化荐书与相似书推荐\n· 查库存、索书号、馆藏位置\n· 查你的借阅记录与到期提醒\n· 帮你提交借阅申请、归还图书（需登录读者账号）\n· 馆藏统计、热门榜、读者口碑\n· 借阅规则与流程答疑\n· 为单本书生成 AI 导读',
-    books: [], intent: 'who', chips: ['帮我借《乡土中国》', '馆藏统计', '热门榜']
+    reply: '我是数智馆员小文，能做的事：\n· 检索馆藏（书名 / 作者 / 标签 / 索书号）\n· 荐书与相似书推荐\n· 查馆藏位置、册数\n· 馆藏统计与新上架\n· 介绍平台版块与摘星辰计划\n· 为单本书生成 AI 导读',
+    books: [], intent: 'who', chips: ['推荐几本书', '馆藏统计', '摘星辰是什么']
   };
 }
 
 // 离线大脑主流程
-function offlineAnswer(q, slots, intent, uid, sess) {
+function offlineAnswer(q, slots, intent, sess) {
   // 追问：换一批
   if (FOLLOWUP.more.test(q) && sess.lastPool && sess.lastPool.length) {
     const start = Math.min(sess.poolOffset || 0, sess.lastPool.length - 1);
@@ -645,7 +509,7 @@ function offlineAnswer(q, slots, intent, uid, sess) {
     }
     return { reply: '这一批已经翻完啦，换个关键词试试？', books: [], intent: 'more', chips: ['推荐几本书'] };
   }
-  // 追问：第 N 本 / 指代上一本（按当前意图决定给详情、口碑还是库存）
+  // 追问：第 N 本 / 指代上一本 → 给详情
   const ord = q.match(FOLLOWUP.ordinal);
   const hasExplicitTitle = (slots.titles || []).length > 0;
   const useLast = !hasExplicitTitle && FOLLOWUP.pronoun.test(q) && sess.lastBooks && sess.lastBooks.length;
@@ -657,59 +521,23 @@ function offlineAnswer(q, slots, intent, uid, sess) {
     } else id = sess.lastBooks[sess.lastBooks.length - 1];
     if (id) {
       const b = db.prepare(`SELECT ${F} FROM books WHERE id=?`).get(id);
-      if (b) {
-        const s2 = { titles: [b.title], clean: b.title };
-        if (intent === 'opinion') return toolOpinion(s2, b);
-        if (intent === 'availability') return toolAvailability(s2, b);
-        return toolDigest(s2, b);
-      }
+      if (b) return toolDigest({ titles: [b.title], clean: b.title }, b);
     }
   }
 
   // 指定了书名却查不到 → 直接给出「没有这本」的兜底，不再瞎猜
   const anchor = slots.titles.length ? findBook(slots.titles[0]) : null;
-  const needAnchor = ['similar', 'opinion', 'digest', 'availability'];
-  if (needAnchor.includes(intent) && slots.titles.length && !anchor) return fallbackAnswer(uid, slots);
+  if (['similar', 'digest', 'availability'].includes(intent) && slots.titles.length && !anchor) return fallbackAnswer(slots);
 
   switch (intent) {
     case 'greeting': case 'thanks': case 'who': return smalltalk(intent);
-    case 'my_borrows': return toolMyBorrows(uid);
-    case 'overdue': {
-      const row = matchRule('逾期');
-      const mine = myBorrows(uid);
-      const od = (mine || []).filter(r => r.status === '逾期');
-      return { reply: row.ans + (od.length ? `\n你当前有 ${od.length} 本逾期：${od.map(r => '《' + r.title + '》').join('、')}` : ''), books: [], intent: 'overdue', chips: ['我的借阅', '怎么还书？'] };
-    }
     case 'stats': return toolStats();
     case 'hot': return toolHot(slots) || toolStats();
-    case 'similar': return toolSimilar(slots, anchor) || toolSearch(slots, q) || fallbackAnswer(uid, slots);
-    case 'opinion': return toolOpinion(slots, anchor) || toolDigest(slots, anchor) || toolSearch(slots, q) || fallbackAnswer(uid, slots);
-    case 'digest': return toolDigest(slots, anchor) || toolSearch(slots, q) || fallbackAnswer(uid, slots);
-    case 'availability': return toolAvailability(slots, anchor) || toolSearch(slots, q) || fallbackAnswer(uid, slots);
-    case 'recommend': return toolRecommend(slots, uid, sess.lastBooks) || toolSearch(slots, q) || fallbackAnswer(uid, slots);
+    case 'similar': return toolSimilar(slots, anchor) || toolSearch(slots, q) || fallbackAnswer(slots);
+    case 'digest': return toolDigest(slots, anchor) || toolSearch(slots, q) || fallbackAnswer(slots);
+    case 'availability': return toolAvailability(slots, anchor) || toolSearch(slots, q) || fallbackAnswer(slots);
+    case 'recommend': return toolRecommend(slots, sess.lastBooks) || toolSearch(slots, q) || fallbackAnswer(slots);
     case 'category': return toolCategory(slots);
-    case 'borrow': {
-      if (!uid) return { reply: '请先点右上角「登录」读者账号，登录后我就能直接帮你提交借阅申请啦～', books: [], intent: 'borrow', chips: ['怎么登录？'] };
-      const b = resolveActionBook(slots, sess);
-      if (!b) return { reply: '你想借哪一本呢？直接说书名（如「借《乡土中国》」），或在下面书单里挑一本说「就借这本」。', books: shapeAll(recommend(uid, 4)), intent: 'borrow', chips: ['推荐几本书', '热门榜'] };
-      const r = doBorrow(uid, b.id);
-      if (r.error) return { reply: r.error, books: [], intent: 'borrow', chips: ['查看我的借阅', '热门榜'] };
-      return {
-        reply: `已为你提交《${r.book.title}》的借阅申请 ✅\n流程：待馆员审批 → 到馆取书（借期 ${BORROW_DAYS} 天）。可在「我的借阅」查看进度。`,
-        books: [shape(r.book)], intent: 'borrow', chips: ['查看我的借阅', '再推荐几本']
-      };
-    }
-    case 'return_book': {
-      if (!uid) return { reply: '请先登录读者账号，我才能帮你还书。', books: [], intent: 'return_book', chips: ['怎么登录？'] };
-      const b = resolveActionBook(slots, sess);
-      if (!b) return { reply: '你想还哪一本？告诉我书名（如「还《乡土中国》」），或在「我的借阅」里点对应书的「归还」。', books: [], intent: 'return_book', chips: ['我的借阅', '推荐几本书'] };
-      const r = doReturn(uid, b.id);
-      if (r.error) return { reply: r.error, books: [], intent: 'return_book', chips: ['我的借阅', '热门榜'] };
-      return {
-        reply: `已帮你归还《${r.book.title}》✅${r.wasOverdue ? '（该书此前已逾期，记录已更新）' : ''}\n感谢及时归还～`,
-        books: [shape(r.book)], intent: 'return_book', chips: ['查看我的借阅', '再推荐几本']
-      };
-    }
     case 'rule': {
       const r = matchRule(q);
       if (r) return { reply: r.ans, books: [], intent: 'rule', chips: r.chips || CHIPS_DEFAULT.slice(0, 2) };
@@ -717,41 +545,26 @@ function offlineAnswer(q, slots, intent, uid, sess) {
     }
     default: break;
   }
-  const s = toolSearch(slots, q);
-  if (s) return s;
+  const s2 = toolSearch(slots, q);
+  if (s2) return s2;
   const r = matchRule(q);
   if (r) return { reply: r.ans, books: [], intent: 'rule', chips: r.chips || CHIPS_DEFAULT.slice(0, 2) };
-  return fallbackAnswer(uid, slots);
-}
-
-// 动作类意图解析目标书：书名 → 上轮书单 → 指代（借/还上面那本）
-function resolveActionBook(slots, sess) {
-  if (slots.titles.length) { const b = findBook(slots.titles[0]); if (b) return b; }
-  if (slots.clean) { const b = findBook(slots.clean); if (b) return b; }
-  const lastId = (sess.lastBooks && sess.lastBooks.length) ? sess.lastBooks[sess.lastBooks.length - 1] : null;
-  if (lastId) { const b = db.prepare(`SELECT ${F} FROM books WHERE id=?`).get(lastId); if (b) return b; }
-  return null;
+  return fallbackAnswer(slots);
 }
 
 // ==========================================================
 // 七、主入口：离线优先 + LLM 工具增强
 // ==========================================================
-async function answer(question, { uid } = {}) {
+async function answer(question) {
   const q = String(question || '').trim();
-  if (!q) return { reply: '请告诉我你想查什么书，或问我借阅规则～', books: [], chips: CHIPS_DEFAULT };
-  const sess = getSession(uid);
+  if (!q) return { reply: '请告诉我你想查什么书，或问我平台的版块～', books: [], chips: CHIPS_DEFAULT };
+  const sess = getSession();
   const slots = extractSlots(q);
   const intent = detectIntent(q);
-  const offline = offlineAnswer(q, slots, intent, uid, sess) || fallbackAnswer(uid, slots);
+  const offline = offlineAnswer(q, slots, intent, sess) || fallbackAnswer(slots);
   offline.mode = 'rule';
 
-  // 动作类意图（借书/还书）确定性执行，不经 LLM，确保行为可预期
-  if (intent === 'borrow' || intent === 'return_book') {
-    remember(uid, q, offline, { pool: offline.pool, offset: offline.offset });
-    return offline;
-  }
-
-  if (!llmEnabled()) { remember(uid, q, offline, { pool: offline.pool, offset: offline.offset }); return offline; }
+  if (!llmEnabled()) { remember(q, offline, { pool: offline.pool, offset: offline.offset }); return offline; }
 
   // ---- LLM 工具增强：先让模型选工具，再用真实数据作答 ----
   try {
@@ -767,11 +580,12 @@ async function answer(question, { uid } = {}) {
       if (m) { try { picked = JSON.parse(m[0]); } catch (e) { picked = null; } }
     }
     if (picked && picked.tool && picked.tool !== 'none') {
-      const res = runToolByName(picked.tool, picked.args || {}, { uid });
+      const res = runToolByName(picked.tool, picked.args || {}, {});
       const ctxText = toolResultToText(res);
       const final = await llmChat([
         { role: 'system', content: PERSONA + '严格基于工具返回的真实数据作答，中文，简洁（120 字以内），书名用《》。不要编造数据。' },
-        { role: 'user', content: `用户问题：${q}\n工具返回：\n${ctxText}` }
+        { role: 'user', content: `用户问题：${q}\n工具返回：
+${ctxText}` }
       ]);
       if (final) {
         const out = {
@@ -779,10 +593,9 @@ async function answer(question, { uid } = {}) {
           chips: ['换一批', '还有类似的吗？', '馆藏统计'],
           pool: (res.books || []).map(b => b.id), offset: (res.books || []).length
         };
-        remember(uid, q, out, { pool: out.pool, offset: out.offset });
+        remember(q, out, { pool: out.pool, offset: out.offset });
         return out;
       }
-      // 模型未给出答案 → 退回离线结果但保留真实数据
       if ((res.books || []).length) offline.books = res.books;
     }
     // 直答（不带工具）
@@ -792,29 +605,27 @@ async function answer(question, { uid } = {}) {
     ]);
     if (direct) {
       const out = { reply: direct, books: offline.books || [], intent, mode: 'llm', chips: offline.chips || CHIPS_DEFAULT, pool: offline.pool, offset: offline.offset };
-      remember(uid, q, out, { pool: out.pool, offset: out.offset });
+      remember(q, out, { pool: out.pool, offset: out.offset });
       return out;
     }
   } catch (e) { /* 任何异常都回落到离线结果 */ }
 
-  remember(uid, q, offline, { pool: offline.pool, offset: offline.offset });
+  remember(q, offline, { pool: offline.pool, offset: offline.offset });
   return offline;
 }
 
 // ==========================================================
 // 八、AI 导读（RAG + 真实数据）
 // ==========================================================
-async function digest(book, { uid } = {}) {
+async function digest(book) {
   const related = similarBooks(book.id, 4);
-  const rv = reviewsOf(book.id);
   const tags = (book.tags || '').split(',').filter(Boolean);
   const ctx = [
     `书名：${book.title}`, `分类：${book.category || '未分类'}`, `作者：${book.author || '未知'}`,
     `出版社：${book.publisher || '未知'}`, `年份：${book.year || '未知'}`,
     `索书号：${book.call_no || '—'}`, `馆藏位置：${book.location || '—'}`,
-    `库存：可借 ${book.available} / 共 ${book.total}`,
+    `馆藏：共 ${book.total} 册`,
     `简介：${book.intro || '无'}`, `标签：${tags.join('、') || '无'}`,
-    `读者评价：${rv.n ? rv.n + ' 条，平均 ' + rv.avg.toFixed(2) + '；' + rv.rows.map(r => r.content).join(' / ') : '暂无'}`,
     `同分类相关：${related.map(b => '《' + b.title + '》').join('、') || '无'}`
   ].join('\n');
   if (llmEnabled()) {
@@ -826,9 +637,10 @@ async function digest(book, { uid } = {}) {
   }
   const intro = (book.intro || '').trim() || '馆藏暂未录入官方简介，建议先读目录与第一章把握框架。';
   const tagTxt = tags.length ? '阅读时可重点关注：' + tags.join('、') + '。' : '';
-  const revTxt = rv.n ? `馆内 ${rv.n} 条书评，平均口碑 ${rv.avg.toFixed(2)}/1。` : '';
   return {
-    reply: `《${book.title}》属于「${book.category || '未分类'}」${book.author ? ('，作者' + book.author) : ''}${book.publisher ? ('，' + book.publisher) : ''}${book.year ? ('，' + book.year) : ''}。\n${intro}\n${tagTxt}${revTxt}当前可借 ${book.available}/${book.total} 册${book.location ? ('，位置 ' + book.location) : ''}。`,
+    reply: `《${book.title}》属于「${book.category || '未分类'}」${book.author ? ('，作者' + book.author) : ''}${book.publisher ? ('，' + book.publisher) : ''}${book.year ? ('，' + book.year) : ''}。
+${intro}
+${tagTxt}馆藏共 ${book.total} 册${book.location ? ('，位置 ' + book.location) : ''}。`,
     books: shapeAll(related), mode: 'rule'
   };
 }
@@ -840,12 +652,11 @@ function status() {
     model: online ? (process.env.LLM_MODEL || 'gpt-3.5-turbo') : 'offline-agent',
     tools: TOOL_SPECS.map(t => t.name),
     intents: INTENT_RULES.map(r => r[0]),
-    memory: true, borrowDays: BORROW_DAYS
+    memory: true
   };
 }
 
 module.exports = {
   answer, digest, status, resetSession,
-  searchBooks, recommend, similarBooks, hotBooks, libraryStats, myBorrows, findBook, reviewsOf,
-  BORROW_DAYS
+  searchBooks, recommend, similarBooks, hotBooks, libraryStats, findBook
 };

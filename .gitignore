@@ -13,5 +13,19 @@ references/
 *.log
 .DS_Store
 
+# 环境变量（管理口令与签名密钥）
+.env
+data/founder.json
+
+# 静态发布产物
+dist-static/
+
+# 管理端上传的媒体文件（内容随本地数据走，不入 git）
+public/media/*
+!public/media/.gitkeep
+
+# 数据库备份
+data/*.bak-*
+
 # WorkBuddy 本地记忆/配置（项目相关，但不入代码库）
 .workbuddy/

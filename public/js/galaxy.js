@@ -1,0 +1,371 @@
+// 数字人文宇宙 · 3D 星系首页（Three.js，本地 vendor，无 CDN）
+// 架构：
+//   - 馆藏按分类分布为旋臂的合并 Points（单 draw call）
+//   - 摘星辰作品为大号行星（Sprite）+ HTML 标签
+//   - OrbitControls 自动缓旋 + 触控；Raycaster 拾取
+//   - 降级策略：WebGL 不可用 / import 失败 → 返回 false，前端回退 2D StarScene
+//   - WebXR 实验性：navigator.xr 支持沉浸式会话时才显示 VR 按钮
+const GALAXY = (() => {
+  let instance = null;
+  let T = null;        // THREE 模块（init 时注入）
+  let OC = null;       // OrbitControls（init 时注入）
+
+  const CATEGORY_COLORS = {
+    '文学类': 0xf0a23c, '艺术类': 0xe070a0, '历史': 0x3aa0a2, '思政综合类': 0xb8892e,
+    default: 0x9a8cd0
+  };
+  const WORK_COLOR = 0xffc35e;
+  const WORK_ARM = 4; // 摘星辰独立旋臂序号
+
+  function colorForCat(cat) {
+    if (cat && CATEGORY_COLORS[cat] !== undefined) return CATEGORY_COLORS[cat];
+    if (!cat) return CATEGORY_COLORS.default;
+    let h = 0; for (let i = 0; i < cat.length; i++) h = (h * 31 + cat.charCodeAt(i)) % 360;
+    return new T.Color(`hsl(${h}, 60%, 62%)`);
+  }
+
+  function escHtml(s) {
+    return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  // 星点贴图（缓存）
+  let _starTex = null;
+  function starTexture() {
+    if (_starTex) return _starTex;
+    const c = document.createElement('canvas'); c.width = c.height = 64;
+    const g = c.getContext('2d');
+    const grd = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grd.addColorStop(0, 'rgba(255,255,255,1)');
+    grd.addColorStop(0.3, 'rgba(255,255,255,0.8)');
+    grd.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = grd; g.beginPath(); g.arc(32, 32, 32, 0, Math.PI * 2); g.fill();
+    _starTex = new T.CanvasTexture(c);
+    return _starTex;
+  }
+
+  // 旋臂布局：与 2D StarScene 同源的 pinwheel 公式
+  function armPos(base, t, Rmax, jitter) {
+    const WIND = Math.PI * 1.35;
+    const theta = base + t * WIND + (Math.random() - 0.5) * (jitter || 0.5);
+    const rr = Rmax * Math.pow(t, 0.62) * (0.88 + Math.random() * 0.24);
+    return {
+      x: Math.cos(theta) * rr,
+      y: (Math.random() - 0.5) * 3.2,
+      z: Math.sin(theta) * rr
+    };
+  }
+
+  class Galaxy {
+    constructor(canvas, books, opts) {
+      this.canvas = canvas;
+      this.books = books || [];
+      this.works = (opts && opts.works) || [];
+      this.raf = null;
+      this.disposed = false;
+      this.labels = [];
+      this.reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      this.isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+
+      const el = canvas.parentElement;
+      this.renderer = new T.WebGLRenderer({ canvas, antialias: true, alpha: true, powerPreference: 'high-performance' });
+      this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      this.renderer.setSize(el.clientWidth, el.clientHeight, false);
+      this.renderer.xr.enabled = true;
+
+      this.scene = new T.Scene();
+
+      this.camera = new T.PerspectiveCamera(55, el.clientWidth / el.clientHeight, 0.1, 2000);
+      this.camera.position.set(0, 46, 88);
+
+      // 悬停提示层
+      this.tip = document.createElement('div');
+      this.tip.className = 'star-tip';
+      el.appendChild(this.tip);
+
+      this.buildCore();
+      this.buildBooks();
+      this.buildWorks();
+      this.buildAmbient();
+
+      this.controls = new OC(this.camera, this.renderer.domElement);
+      this.controls.enableDamping = true;
+      this.controls.dampingFactor = 0.06;
+      this.controls.autoRotate = !this.reduced;
+      this.controls.autoRotateSpeed = 0.5;
+      this.controls.minDistance = 28;
+      this.controls.maxDistance = 240;
+      this.controls.maxPolarAngle = Math.PI * 0.48;
+      this.controls.target.set(0, 0, 0);
+
+      this.raycaster = new T.Raycaster();
+      this.raycaster.params.Points.threshold = 1.6;
+      this.pointer = new T.Vector2(-10, -10);
+      this.bindEvents();
+      this.setupXR();
+      this.resize();
+      this.loop();
+    }
+
+    get stageEl() { return this.canvas.parentElement; }
+
+    buildCore() {
+      const mkGlow = (color, inner, scale) => {
+        const c = document.createElement('canvas'); c.width = c.height = 256;
+        const g = c.getContext('2d');
+        const grd = g.createRadialGradient(128, 128, 0, 128, 128, 128);
+        grd.addColorStop(0, inner);
+        grd.addColorStop(0.35, color + 'aa');
+        grd.addColorStop(1, color + '00');
+        g.fillStyle = grd; g.fillRect(0, 0, 256, 256);
+        const mat = new T.SpriteMaterial({ map: new T.CanvasTexture(c), transparent: true, depthWrite: false });
+        const sp = new T.Sprite(mat);
+        sp.scale.setScalar(scale);
+        return sp;
+      };
+      this.core1 = mkGlow('#ffd9a0', 'rgba(255,248,230,0.95)', 34);
+      const core2 = mkGlow('#c9a0ff', 'rgba(210,180,255,0.35)', 70);
+      this.scene.add(core2); this.scene.add(this.core1);
+    }
+
+    buildBooks() {
+      const groups = new Map();
+      this.books.forEach(b => { const k = b.category || '其他'; if (!groups.has(k)) groups.set(k, []); groups.get(k).push(b); });
+      const sorted = [...groups.entries()].sort((a, b) => b[1].length - a[1].length);
+      const N = sorted.length + 1;
+      const Rmax = 72;
+      const cap = this.isMobile ? 36000 : 120000;
+      const positions = [], colors = [], meta = [];
+      sorted.forEach(([key, arr], k) => {
+        const base = (k / N) * Math.PI * 2;
+        const col = new T.Color(colorForCat(key));
+        const step = arr.length > cap ? Math.ceil(arr.length / cap) : 1;
+        arr.forEach((b, j) => {
+          if (j % step) return;
+          const t = (j + 0.5) / arr.length;
+          const p = armPos(base, t, Rmax);
+          const mag = Math.pow(Math.random(), 2.2);
+          const c = col.clone().multiplyScalar(0.55 + 0.45 * mag);
+          positions.push(p.x, p.y, p.z);
+          colors.push(c.r, c.g, c.b);
+          meta.push({ book: b });
+        });
+      });
+      this.bookMeta = meta;
+      const geo = new T.BufferGeometry();
+      geo.setAttribute('position', new T.Float32BufferAttribute(positions, 3));
+      geo.setAttribute('color', new T.Float32BufferAttribute(colors, 3));
+      const mat = new T.PointsMaterial({
+        size: 1.5, map: starTexture(), vertexColors: true, transparent: true,
+        depthWrite: false, blending: T.AdditiveBlending, sizeAttenuation: true
+      });
+      this.bookPoints = new T.Points(geo, mat);
+      this.scene.add(this.bookPoints);
+    }
+
+    buildWorks() {
+      const Rmax = 80;
+      const base = (WORK_ARM / (WORK_ARM + 1)) * Math.PI * 2 + 0.6;
+      const tex = starTexture();
+      this.workSprites = [];
+      this.works.slice(0, 12).forEach((w, i) => {
+        const t = 0.3 + 0.6 * (i / Math.max(1, Math.min(11, this.works.length - 1) || 1));
+        const p = armPos(base, t, Rmax, 0.25);
+        p.y += 2;
+        const mat = new T.SpriteMaterial({
+          map: tex, color: WORK_COLOR, transparent: true,
+          depthWrite: false, blending: T.AdditiveBlending
+        });
+        const sp = new T.Sprite(mat);
+        sp.position.set(p.x, p.y, p.z);
+        sp.scale.setScalar(6.5);
+        sp.userData = { work: w };
+        this.scene.add(sp);
+        this.workSprites.push(sp);
+        // HTML 标签（点击直达作品）
+        const label = document.createElement('div');
+        label.className = 'galaxy-label';
+        label.textContent = (w.code ? w.code + ' · ' : '') + w.title;
+        label.addEventListener('click', () => { location.hash = '#/work/' + w.id; });
+        this.stageEl.appendChild(label);
+        this.labels.push({ el: label, pos: sp.position });
+      });
+    }
+
+    buildAmbient() {
+      const count = this.isMobile ? 400 : 900;
+      const positions = [];
+      for (let i = 0; i < count; i++) {
+        const r = 220 + Math.random() * 260;
+        const th = Math.random() * Math.PI * 2;
+        const ph = Math.acos(2 * Math.random() - 1);
+        positions.push(r * Math.sin(ph) * Math.cos(th), r * Math.cos(ph) * 0.6, r * Math.sin(ph) * Math.sin(th));
+      }
+      const geo = new T.BufferGeometry();
+      geo.setAttribute('position', new T.Float32BufferAttribute(positions, 3));
+      const mat = new T.PointsMaterial({
+        size: 1.1, map: starTexture(), color: 0x8a90c8,
+        transparent: true, opacity: 0.5, depthWrite: false, sizeAttenuation: true
+      });
+      this.ambient = new T.Points(geo, mat);
+      this.scene.add(this.ambient);
+    }
+
+    bindEvents() {
+      const el = this.renderer.domElement;
+      el.addEventListener('pointermove', e => {
+        const rect = el.getBoundingClientRect();
+        this.pointer.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+        this.pointer.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+      });
+      el.addEventListener('pointerleave', () => { this.pointer.set(-10, -10); this.clearHover(); });
+      el.addEventListener('click', () => {
+        const hit = this.pick();
+        if (!hit) return;
+        const u = hit.userData || {};
+        if (u.book) location.hash = '#/book/' + u.book.id;
+        else if (u.work) location.hash = '#/work/' + u.work.id;
+      });
+      this._ro = new ResizeObserver(() => this.resize());
+      this._ro.observe(this.stageEl);
+      this._vis = () => {
+        if (document.hidden && this.raf) { cancelAnimationFrame(this.raf); this.raf = null; }
+        else if (!document.hidden && !this.raf && !this.disposed) this.loop();
+      };
+      document.addEventListener('visibilitychange', this._vis);
+    }
+
+    pick() {
+      this.raycaster.setFromCamera(this.pointer, this.camera);
+      const hitsW = this.raycaster.intersectObjects(this.workSprites || [], false);
+      if (hitsW.length) return hitsW[0].object;
+      const hits = this.raycaster.intersectObject(this.bookPoints, false);
+      if (hits.length && hits[0].index != null && this.bookMeta[hits[0].index]) {
+        return { userData: this.bookMeta[hits[0].index] };
+      }
+      return null;
+    }
+
+    clearHover() {
+      this.tip.classList.remove('on');
+      this.renderer.domElement.style.cursor = 'default';
+    }
+
+    hover() {
+      const hit = this.pick();
+      if (!hit) { this.clearHover(); return; }
+      const u = hit.userData || {};
+      let sx = 0, sy = 0;
+      if (hit.isSprite) {
+        const p = hit.position.clone().project(this.camera);
+        sx = (p.x * 0.5 + 0.5) * this.stageEl.clientWidth;
+        sy = (-p.y * 0.5 + 0.5) * this.stageEl.clientHeight;
+      } else if (hit.index != null) {
+        const pos = this.bookPoints.geometry.attributes.position;
+        const wp = new T.Vector3(pos.getX(hit.index), pos.getY(hit.index), pos.getZ(hit.index))
+          .applyMatrix4(this.bookPoints.matrixWorld).project(this.camera);
+        sx = (wp.x * 0.5 + 0.5) * this.stageEl.clientWidth;
+        sy = (-wp.y * 0.5 + 0.5) * this.stageEl.clientHeight;
+      }
+      const b = u.book, w = u.work;
+      this.tip.innerHTML = b
+        ? `<b>${escHtml(b.title)}</b><div class="m">${escHtml(b.author || '未知')} · ${escHtml(b.category || '')}</div><div class="s">点击查看详情</div>`
+        : `<b>${escHtml(w.title)}</b><div class="m">${escHtml(w.code || '')} · 第 ${w.issue_no} 期</div><div class="s">点击打开作品</div>`;
+      this.tip.style.left = Math.min(this.stageEl.clientWidth - 110, Math.max(110, sx)) + 'px';
+      const flip = sy < 92;
+      this.tip.style.transform = flip ? 'translate(-50%,0) translateY(14px)' : 'translate(-50%,-100%) translateY(-14px)';
+      this.tip.style.top = (flip ? sy + 8 : sy - 8) + 'px';
+      this.tip.classList.add('on');
+      this.renderer.domElement.style.cursor = 'pointer';
+    }
+
+    setupXR() {
+      try {
+        if (!navigator.xr || !navigator.xr.isSessionSupported) return;
+        navigator.xr.isSessionSupported('immersive-vr').then(ok => {
+          if (!ok || this.disposed) return;
+          import('../vendor/webxr/VRButton.js').then(({ VRButton }) => {
+            if (this.disposed) return;
+            const btn = VRButton.createButton(this.renderer);
+            btn.classList.add('vr-button');
+            this.stageEl.appendChild(btn);
+          }).catch(() => {});
+        }).catch(() => {});
+      } catch (e) { /* XR 不可用：静默跳过 */ }
+    }
+
+    resize() {
+      const el = this.stageEl;
+      if (!el) return;
+      const w = Math.min(4000, Math.max(320, el.clientWidth || 320));
+      const h = Math.min(4000, Math.max(300, el.clientHeight || 300));
+      this.camera.aspect = w / h;
+      this.camera.updateProjectionMatrix();
+      this.renderer.setSize(w, h, false);
+    }
+
+    loop() {
+      if (this.disposed) return;
+      this.raf = requestAnimationFrame(() => this.loop());
+      const t = performance.now() / 1000;
+      this.controls.update();
+      if (this.core1) this.core1.scale.setScalar(34 + 1.6 * Math.sin(t * 0.9));
+      if (this.workSprites) {
+        this.workSprites.forEach((sp, i) => {
+          sp.scale.setScalar(6.5 + 0.7 * Math.sin(t * 1.2 + i * 1.7));
+        });
+      }
+      for (const { el, pos } of this.labels) {
+        const p = pos.clone().project(this.camera);
+        const vis = p.z < 1;
+        el.style.display = vis ? 'block' : 'none';
+        if (vis) {
+          el.style.left = ((p.x * 0.5 + 0.5) * this.stageEl.clientWidth) + 'px';
+          el.style.top = ((-p.y * 0.5 + 0.5) * this.stageEl.clientHeight - 18) + 'px';
+        }
+      }
+      this._hoverTick = (this._hoverTick || 0) + 1;
+      if (this._hoverTick % 3 === 0) this.hover();
+      this.renderer.render(this.scene, this.camera);
+    }
+
+    destroy() {
+      this.disposed = true;
+      if (this.raf) cancelAnimationFrame(this.raf);
+      if (this._ro) this._ro.disconnect();
+      document.removeEventListener('visibilitychange', this._vis || (() => {}));
+      if (this.controls) this.controls.dispose();
+      if (this.labels) this.labels.forEach(({ el }) => el.remove());
+      if (this.tip && this.tip.parentNode) this.tip.remove();
+      const vrBtn = this.stageEl.querySelector('.vr-button');
+      if (vrBtn) vrBtn.remove();
+      try { this.renderer.dispose(); } catch (e) {}
+      instance = null;
+    }
+  }
+
+  // 对外接口：init(canvas, books, opts) → Promise<boolean>；destroy()
+  async function init(canvas, books, opts) {
+    if (instance) { instance.destroy(); instance = null; }
+    try {
+      const test = document.createElement('canvas');
+      const gl = test.getContext('webgl2') || test.getContext('webgl');
+      if (!gl) return false;
+    } catch (e) { return false; }
+    try {
+      if (!T) {
+        T = await import('../vendor/three.module.min.js');
+        const oc = await import('../vendor/controls/OrbitControls.js');
+        OC = oc.OrbitControls;
+      }
+      instance = new Galaxy(canvas, books, opts);
+      return true;
+    } catch (e) {
+      console.warn('[galaxy] 初始化失败：', e);
+      T = null; OC = null;
+      return false;
+    }
+  }
+
+  return { init, destroy() { if (instance) instance.destroy(); }, get active() { return !!instance; } };
+})();
+window.Galaxy = GALAXY;

@@ -1,11 +1,12 @@
 {
-  "name": "digital-humanities-library",
-  "version": "1.0.0",
-  "description": "数字人文学院图书室管理系统（AI+管理服务 大赛参赛底座）",
+  "name": "dh-platform",
+  "version": "2.0.0",
+  "description": "数文拾光 · 数字人文平台（宇宙首页 / 书库 / 摘星辰 / 资讯，本地管理 + 静态发布）",
   "type": "commonjs",
   "main": "server/server.js",
   "scripts": {
     "start": "node server/server.js",
+    "publish": "node scripts/export-static.js",
     "seed-test": "node scripts/seed-test.js"
   },
   "engines": {
@@ -14,6 +15,7 @@
   "dependencies": {
     "better-sqlite3": "^11.3.0",
     "cors": "^2.8.6",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "multer": "^2.5.0"
   }
 }

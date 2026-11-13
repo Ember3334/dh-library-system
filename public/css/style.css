@@ -5,7 +5,7 @@
   --green:#5e9e5e; --red:#c5524a; --amber:#cf9a2b;
   --radius:16px; --shadow:0 10px 40px rgba(120,80,40,.18);
   /* 知识星空 · 夜空底色（浅色主题 = 晨昏薄暮蓝） */
-  --sky-1:#3f5f96; --sky-2:#213a63; --sky-3:#0f1729;
+  --sky-1:#54669f; --sky-2:#2c3a68; --sky-3:#161f3c;
   --sky-glow:rgba(150,180,240,.20); --sky-vignette:rgba(4,8,18,.55);
   --sky-panel:rgba(12,18,32,.55); --sky-ink:#e8eefc;
 }
@@ -21,6 +21,12 @@ body{
     radial-gradient(1200px 600px at 82% -10%, rgba(224,137,43,.22), transparent 60%),
     radial-gradient(900px 520px at -8% 112%, rgba(194,106,59,.2), transparent 60%),
     linear-gradient(180deg,var(--bg),var(--bg2));
+}
+/* 晨昏霞光纹理（AI 生成背景，浅色主题叠加，低存在感） */
+#bg-grid::before{
+  content:""; position:absolute; inset:0;
+  background:url('../img/bg-dusk.jpg') center/cover no-repeat;
+  opacity:.16; mix-blend-mode:multiply;
 }
 #bg-grid::after{
   content:""; position:absolute; inset:0;
@@ -39,7 +45,7 @@ button{font-family:inherit;cursor:pointer;border:none}
 /* 顶栏 */
 #topbar{
   position:sticky; top:0; z-index:50; display:flex; align-items:center; gap:18px;
-  padding:14px 26px; background:rgba(247,239,226,.82); backdrop-filter:blur(14px);
+  padding:14px 26px; background:var(--topbar-bg,rgba(247,239,226,.82)); backdrop-filter:blur(14px);
   border-bottom:1px solid var(--line);
 }
 .brand{display:flex;align-items:center;gap:12px;cursor:pointer}
@@ -289,6 +295,7 @@ body,#topbar,.card,.kpi,.book-card,.btn,.nav-ai,.nav-theme,.chip,.tab,.borrow-it
   --sky-1:#1a2746; --sky-2:#0e1730; --sky-3:#05070f;
   --sky-glow:rgba(120,150,230,.16); --sky-vignette:rgba(2,4,12,.62);
   --sky-panel:rgba(8,12,24,.6); --sky-ink:#eaf0ff;
+  --topbar-bg:rgba(27,21,16,.85);
 }
 [data-theme="dark"] #bg-grid{
   background:
@@ -296,6 +303,7 @@ body,#topbar,.card,.kpi,.book-card,.btn,.nav-ai,.nav-theme,.chip,.tab,.borrow-it
     radial-gradient(900px 520px at -8% 112%, rgba(194,106,59,.16), transparent 60%),
     linear-gradient(180deg,var(--bg),var(--bg2));
 }
+[data-theme="dark"] #bg-grid::before{display:none}
 [data-theme="dark"] .kpi .v{background:linear-gradient(135deg,var(--ai),var(--accent));-webkit-background-clip:text;background-clip:text;color:transparent}
 .nav-theme{padding:8px 14px;border-radius:10px;font-size:13px;color:var(--muted);background:var(--card);border:1px solid var(--line);cursor:pointer;transition:.2s}
 .nav-theme:hover{color:var(--txt);border-color:var(--accent)}
@@ -400,8 +408,8 @@ body,#topbar,.card,.kpi,.book-card,.btn,.nav-ai,.nav-theme,.chip,.tab,.borrow-it
 
 /* 移动端适配 */
 @media(max-width:640px){
-  #topbar{padding:12px 14px;gap:10px;flex-wrap:wrap}
-  #nav{gap:4px;order:3;width:100%}
+  #topbar{padding:12px 14px;gap:8px;flex-wrap:wrap}
+  #nav{flex:1 1 100%;width:100%;order:3;justify-content:flex-start}
   #nav a{padding:6px 10px;font-size:13px}
   .nav-ai,.nav-theme{padding:6px 10px;font-size:12px}
   #app{padding:16px}
@@ -449,3 +457,120 @@ body,#topbar,.card,.kpi,.book-card,.btn,.nav-ai,.nav-theme,.chip,.tab,.borrow-it
 .d-actions .btn{flex:1}
 .d-shake{animation:drawShake .4s}
 @keyframes drawShake{0%,100%{transform:translateX(0)}25%{transform:translateX(-7px)}75%{transform:translateX(7px)}}
+
+/* ==========================================================
+   数字人文平台新增样式（v2.0）
+   ========================================================== */
+/* 宇宙首页：与 star-wrap 同规格的容器 */
+.galaxy-wrap{position:relative;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;box-shadow:var(--shadow)}
+.galaxy-wrap.loading .star-canvas{opacity:.6}
+.galaxy-label{
+  position:absolute;z-index:6;transform:translate(-50%,-100%);white-space:nowrap;
+  font-size:11px;color:#ffd9a3;background:var(--sky-panel);border:1px solid rgba(255,195,94,.35);
+  border-radius:999px;padding:2px 10px;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  cursor:pointer;user-select:none;transition:opacity .2s
+}
+.galaxy-label:hover{background:rgba(255,195,94,.22)}
+.vr-button{z-index:8}
+/* 版块入口卡 */
+.portal-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:16px;margin-top:20px}
+.portal{
+  display:flex;flex-direction:column;gap:6px;padding:20px 22px;border-radius:var(--radius);
+  background:var(--card);border:1px solid var(--line);box-shadow:var(--shadow);color:var(--txt);
+  transition:transform .25s,box-shadow .25s
+}
+.portal:hover{transform:translateY(-4px);box-shadow:0 16px 46px rgba(120,80,40,.26);color:var(--txt)}
+.portal .p-icon{font-size:26px}
+.portal b{font-size:16px}
+.portal span{font-size:12px;color:var(--muted)}
+/* 摘星辰 */
+.issue-block{margin-top:22px}
+.issue-head{display:flex;align-items:center;gap:14px;margin-bottom:14px}
+.issue-no{font-weight:800;font-size:18px;color:var(--accent);white-space:nowrap}
+.issue-line{flex:1;height:1px;background:linear-gradient(90deg,var(--line),transparent)}
+.work-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:16px}
+.work-grid.related{grid-template-columns:repeat(auto-fill,minmax(200px,1fr))}
+.work-card{
+  background:var(--card);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden;
+  cursor:pointer;transition:transform .25s,box-shadow .25s;box-shadow:0 4px 18px rgba(120,80,40,.12)
+}
+.work-card:hover{transform:translateY(-4px);box-shadow:0 14px 40px rgba(120,80,40,.24)}
+.work-cover{position:relative;height:130px;display:grid;place-items:center;background:linear-gradient(150deg,rgba(201,160,255,.16),rgba(255,195,94,.14)),var(--card-solid)}
+.work-cover img{width:100%;height:100%;object-fit:cover}
+.work-badge{display:grid;place-items:center;filter:drop-shadow(0 4px 14px rgba(160,120,255,.35))}
+.work-badge.big{padding:6px}
+.work-body{padding:14px 16px 16px}
+.work-code{margin-bottom:6px}
+.star-chip{
+  display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600;color:var(--cc,var(--accent));
+  border:1px solid color-mix(in srgb,var(--cc,var(--accent)) 40%,transparent);
+  background:color-mix(in srgb,var(--cc,var(--accent)) 10%,transparent);
+  border-radius:999px;padding:3px 10px
+}
+.work-body h3{font-size:15px;margin-bottom:6px}
+.work-summary{font-size:12px;color:var(--muted);margin-bottom:8px}
+.work-meta{display:flex;gap:10px;font-size:11px;color:var(--dim);flex-wrap:wrap}
+/* 作品详情 */
+.work-detail{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:24px;box-shadow:var(--shadow)}
+.work-detail-head{display:flex;gap:16px;align-items:flex-start;margin-bottom:14px;flex-wrap:wrap}
+.work-detail-head h1{font-size:22px;margin-bottom:8px}
+.work-detail-meta{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.work-summary-full{font-size:14px;color:var(--txt);margin:10px 0 18px}
+.work-frame-wrap{position:relative;border-radius:12px;overflow:hidden;border:1px solid var(--line);background:#0f1424}
+.work-frame{width:100%;height:min(72vh,640px);border:0;display:block}
+.work-image img{max-width:100%;border-radius:12px;border:1px solid var(--line)}
+.work-video video{width:100%;max-height:70vh;border-radius:12px;background:#000}
+.work-link-card{
+  display:flex;flex-direction:column;gap:10px;align-items:flex-start;padding:22px;border-radius:12px;
+  border:1px dashed var(--line);background:rgba(194,106,59,.05)
+}
+/* 资讯 */
+.news-list{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;margin-top:6px}
+.news-card{
+  display:flex;flex-direction:column;background:var(--card);border:1px solid var(--line);
+  border-radius:var(--radius);overflow:hidden;transition:transform .25s,box-shadow .25s;box-shadow:0 4px 18px rgba(120,80,40,.12)
+}
+.news-card:hover{transform:translateY(-4px);box-shadow:0 14px 40px rgba(120,80,40,.24)}
+.news-cover{height:140px;overflow:hidden}
+.news-cover img{width:100%;height:100%;object-fit:cover}
+.news-cover-ph{display:grid;place-items:center;font-size:34px;font-weight:800;color:var(--accent);
+  background:linear-gradient(150deg,rgba(194,106,59,.12),rgba(47,143,131,.12)),var(--card-solid)}
+.news-body{padding:14px 16px 16px}
+.news-meta{display:flex;gap:10px;align-items:center;margin-bottom:8px}
+.news-body h3{font-size:15px;margin-bottom:6px}
+.news-body p{font-size:12px;color:var(--muted)}
+.news-src{margin-top:8px;font-size:11px;color:var(--dim)}
+/* 资讯详情 */
+.post-detail{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:30px;box-shadow:var(--shadow);max-width:860px}
+.post-detail h1{font-size:24px;margin-bottom:16px}
+.post-cover{margin:14px 0}
+.post-cover img{max-width:100%;border-radius:12px}
+.post-content{font-size:14px;line-height:1.9}
+.post-content h2,.post-content h3,.post-content h4,.post-content h5{margin:18px 0 10px;color:var(--accent)}
+.post-content ul{margin:8px 0 8px 22px}
+.post-content li{margin:4px 0}
+.post-content code{background:rgba(150,110,70,.12);border-radius:5px;padding:1px 7px;font-size:13px}
+.post-content a{text-decoration:underline}
+.md-gap{height:10px}
+.post-src{margin-top:22px;padding-top:16px;border-top:1px solid var(--line)}
+/* 管理端 */
+.manage-link{color:var(--dim);font-weight:800;padding:6px 10px;border-radius:8px;transition:.2s}
+.manage-link:hover{color:var(--accent);background:rgba(194,106,59,.1)}
+.upload-row{display:flex;gap:8px;align-items:center}
+.upload-row input{flex:1}
+.pager{display:flex;gap:14px;align-items:center;justify-content:center;margin:22px 0}
+/* 移动端适配 */
+@media (max-width:720px){
+  #topbar{padding:10px 14px;gap:10px;flex-wrap:wrap}
+  #nav a{padding:7px 10px;font-size:13px}
+  .hero h1{font-size:24px}
+  .search-row{flex-direction:column}
+  .search-row input{width:100%}
+  .work-grid,.news-list{grid-template-columns:1fr}
+  .star-stage{--star-h:380px;height:380px}
+  .detail{grid-template-columns:1fr !important}
+  .kpi-grid{grid-template-columns:repeat(2,1fr) !important}
+  .portal-grid{grid-template-columns:1fr}
+  .post-detail{padding:20px}
+  .galaxy-label{font-size:10px;padding:2px 7px}
+}
