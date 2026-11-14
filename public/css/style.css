@@ -549,7 +549,14 @@ body,#topbar,.card,.kpi,.book-card,.btn,.nav-ai,.nav-theme,.chip,.tab,.borrow-it
   cursor:pointer;user-select:none;transition:opacity .2s
 }
 .galaxy-label:hover{background:rgba(255,195,94,.22)}
-.vr-button{z-index:8}
+/* 真 WebXR 中文按钮（自研，替代官方 VRButton） */
+.vr-button{
+  position:absolute;left:50%;bottom:18px;transform:translateX(-50%);z-index:8;
+  padding:10px 22px;border-radius:999px;font-size:13px;font-weight:700;letter-spacing:1px;
+  color:#2a1d10;background:linear-gradient(135deg,var(--ai),var(--accent));
+  box-shadow:0 8px 26px rgba(224,137,43,.45);opacity:.92;transition:.2s
+}
+.vr-button:hover{opacity:1;transform:translateX(-50%) translateY(-1px)}
 
 /* —— 沉浸宇宙漫游（v2.2 · GalaxyFly） —— */
 .fly-hud{position:absolute;inset:0;z-index:7;pointer-events:none}

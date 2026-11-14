@@ -298,15 +298,24 @@ const GALAXY = (() => {
     }
 
     setupXR() {
+      // 自研中文 VR 按钮：navigator.xr + 安全上下文 + 会话支持 三者齐备才显示
+      // （file:// 与局域网 http 自动隐藏，避免「点了没反应」）
       try {
-        if (!navigator.xr || !navigator.xr.isSessionSupported) return;
+        if (!navigator.xr || !navigator.xr.isSessionSupported || !window.isSecureContext) return;
         navigator.xr.isSessionSupported('immersive-vr').then(ok => {
           if (!ok || this.disposed) return;
-          import('../vendor/webxr/VRButton.js').then(({ VRButton }) => {
+          import('./galaxy-xr.js').then(xr => {
             if (this.disposed) return;
-            const btn = VRButton.createButton(this.renderer);
-            btn.classList.add('vr-button');
-            this.stageEl.appendChild(btn);
+            this.xrModule = xr;
+            xr.createXRButton(this);
+            this.renderer.xr.addEventListener('sessionstart', () => {
+              if (this.disposed) return;
+              Promise.resolve(xr.enter(this, T)).catch(e => console.warn('[xr] 进入 VR 场景失败：', e));
+            });
+            this.renderer.xr.addEventListener('sessionend', () => {
+              if (this.disposed) return;
+              try { xr.leave(this); } catch (e) {}
+            });
           }).catch(() => {});
         }).catch(() => {});
       } catch (e) { /* XR 不可用：静默跳过 */ }
@@ -380,7 +389,8 @@ const GALAXY = (() => {
         });
       }
       if (xrPresenting) {
-        // 头显中 DOM 标签/悬停无意义，全部跳过省 CPU
+        // 头显中 DOM 标签/悬停无意义，全部跳过省 CPU；每帧更新手柄 reticle
+        if (this.xrModule) this.xrModule.frameUpdate(this);
         return this.renderer.render(this.scene, this.camera);
       }
       if (rigActive) {
@@ -405,6 +415,12 @@ const GALAXY = (() => {
 
     destroy() {
       this.disposed = true;
+      // XR 会话中销毁：先结束会话（sessionend → xr.leave 还原桌面态）
+      if (this.renderer.xr && this.renderer.xr.isPresenting) {
+        try { this.renderer.xr.getSession().end(); } catch (e) {}
+      }
+      if (this.xrModule && this._xr) { try { this.xrModule.leave(this); } catch (e) {} }
+      if (this._vrBtn && this._vrBtn.parentNode) this._vrBtn.remove();
       if (window.GalaxyFly) window.GalaxyFly.destroy(this);
       if (this._tick) this.renderer.setAnimationLoop(null);
       if (this._ro) this._ro.disconnect();
