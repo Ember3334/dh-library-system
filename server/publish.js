@@ -9,6 +9,7 @@ const path = require('path');
 const fs = require('fs');
 const db = require('./db');
 const settings = require('./settings');
+const covers = require('./covers');
 
 const ROOT = path.join(__dirname, '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -62,7 +63,11 @@ function exportData() {
   const write = (name, obj) => fs.writeFileSync(path.join(DATA_DIR, name), JSON.stringify(obj), 'utf-8');
 
   // 书库：列表与详情共用同一全量数组（静态版前端自行过滤/分页）
-  const books = db.prepare('SELECT * FROM books ORDER BY id').all();
+  const withCover = b => {
+    if (b && !b.cover && covers.hasCover(b.call_no)) b.cover = '/covers/' + b.call_no + '.jpg';
+    return b;
+  };
+  const books = db.prepare('SELECT * FROM books ORDER BY id').all().map(withCover);
   write('books.json', { books });
   write('books-full.json', { books });
   write('categories.json', {

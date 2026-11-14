@@ -386,24 +386,46 @@ const Views = (() => {
   // 二、公共渲染块
   // ==========================================================
   function coverBlock(book) {
+    // 只有后端确认封面存在（covers/ 有 jpg 或 founder 自定义）才发 <img>，其余直接 SVG 生成书封 → 零 404
     if (book.cover) {
-      return `<div class="cover"><img src="${assetUrl(book.cover)}" alt="" onerror="coverFallback(this)"></div>`;
-    }
-    if (book.call_no) {
-      return `<div class="cover"><img src="${coverUrl(book.call_no)}" alt="" data-id="${book.id}" data-title="${esc(book.title)}" data-author="${esc(book.author)}" data-category="${esc(book.category)}" onerror="coverFallback(this)"></div>`;
+      return `<div class="cover"><img src="${assetUrl(book.cover)}" alt="" loading="lazy" decoding="async" data-id="${book.id}" data-title="${esc(book.title)}" data-author="${esc(book.author)}" data-category="${esc(book.category)}" onerror="coverFallback(this)"></div>`;
     }
     return `<div class="cover"><div class="cover-art">${coverArtSVG(book)}</div></div>`;
   }
-  function bookCard(b) {
+  // 入场错峰：--i 由调用方传入，动画延迟逐张递增（上限 12 张 ≈ 384ms）
+  function bookCard(b, i) {
     const tags = (b.tags || '').split(',').filter(Boolean).slice(0, 3)
       .map(t => `<span class="tag">${t}</span>`).join('');
-    return `<div class="book-card" data-id="${b.id}">
+    return `<div class="book-card" data-id="${b.id}" style="--i:${i || 0}">
       ${coverBlock(b)}
       <div class="book-body">
         <h3>${b.title}</h3>
         <div class="meta">${b.author || '未知'} · ${b.year || ''}</div>
         <div class="tagrow">${tags}</div>
       </div>
+    </div>`;
+  }
+  // 骨架屏：数据未到时按卡片尺寸占位（shimmer 微光），避免整块 spinner + 布局跳动
+  function skCards(n) {
+    let out = '';
+    for (let i = 0; i < (n || 4); i++) {
+      out += `<div class="sk-card" style="--i:${i}">
+        <div class="sk sk-cover"></div>
+        <div class="sk-body"><div class="sk sk-line" style="width:88%"></div><div class="sk sk-line" style="width:55%"></div></div>
+      </div>`;
+    }
+    return out;
+  }
+  // 空状态：图标 + 主文案 + 提示 + 可选行动按钮
+  function emptyState(o) {
+    o = o || {};
+    return `<div class="empty-state">
+      <div class="empty-icon">${o.icon || '🌌'}</div>
+      <div class="empty-title">${esc(o.title || '这里还空空如也')}</div>
+      ${o.hint ? `<div class="empty-hint">${esc(o.hint)}</div>` : ''}
+      ${o.actionText ? (o.actionHref
+        ? `<a class="btn ghost sm" href="${o.actionHref}">${esc(o.actionText)}</a>`
+        : `<button class="btn ghost sm" id="${o.actionId || 'empty-action'}">${esc(o.actionText)}</button>`) : ''}
     </div>`;
   }
   // 星辰代号 → 星徽 SVG（作品封面占位）
@@ -418,7 +440,7 @@ const Views = (() => {
     </svg>`;
   }
   function workCoverBlock(w) {
-    if (w.cover) return `<div class="work-cover"><img src="${assetUrl(w.cover)}" alt="" onerror="this.replaceWith(starBadgeEl('${esc(w.code)}'))"></div>`;
+    if (w.cover) return `<div class="work-cover"><img src="${assetUrl(w.cover)}" alt="" loading="lazy" decoding="async" onerror="this.replaceWith(starBadgeEl('${esc(w.code)}'))"></div>`;
     return `<div class="work-cover"><div class="work-badge">${starBadge(w.code || '')}</div></div>`;
   }
   function starBadgeEl(code) { const d = document.createElement('div'); d.className = 'work-badge'; d.innerHTML = starBadge(code || ''); return d; }
@@ -518,13 +540,15 @@ const Views = (() => {
             <div class="star-title">${esc(S('home.galaxyTitle'))}</div>
             <div class="star-sub">${esc(S('home.galaxySub'))}</div>
           </div>
-          <span class="star-count" id="star-count">—</span>
+          <div class="star-actions">
+            <span class="star-count" id="star-count">—</span>
+          </div>
         </div>
         <div class="star-stage">
           <canvas id="star-canvas" class="star-canvas"></canvas>
           <div class="star-legend" id="star-legend"></div>
         </div>
-        <div class="star-loader" id="star-loader"><span></span><span></span><span></span></div>
+        <div class="star-loader" id="star-loader"><span></span><span></span><span></span><em>正在点亮馆藏星</em></div>
       </div>
       <section class="portal-grid" id="portal-grid">
         <a class="portal" href="#/library"><div class="p-icon">📚</div><b>${esc(S('home.portal1Title'))}</b><span>${ov.totalBooks || '—'} 本 · ${esc(S('home.portal1Desc'))}</span></a>
@@ -545,22 +569,25 @@ const Views = (() => {
       { k: '最大分类', v: top ? top.category : '—', c: 'var(--green)' }
     ].map(c => `<div class="story-card"><div class="v" ${c.c ? `style="color:${c.c}"` : ''}>${c.v == null ? '—' : c.v}</div><div class="k">${c.k}</div></div>`).join('');
     renderLegend(cats);
-    // 3D 优先，降级 2D
-    const loader = $('#star-loader');
-    loader.classList.add('on');
+    // 3D 优先，降级 2D（loading 类挂在 .galaxy-wrap 上，try/finally 保证不永久转圈）
+    const wrap = $('#galaxy-wrap');
     const stars = await API.stars({}).then(r => r.stars || []).catch(() => []);
     const count = $('#star-count');
     if (count) count.textContent = stars.length + ' 本馆藏';
     const canvas = $('#star-canvas');
     let ok3d = false;
+    wrap.classList.add('loading');
     try {
-      ok3d = await window.Galaxy.init(canvas, stars, { works: await API.works({}).then(r => r.works || []).catch(() => []) });
-    } catch (e) { console.warn('[galaxy] 3D 初始化失败，回退 2D：', e); ok3d = false; }
-    if (!ok3d) {
-      if (starScene) starScene.destroy();
-      starScene = new StarScene(canvas, stars);
+      try {
+        ok3d = await window.Galaxy.init(canvas, stars, { works: await API.works({}).then(r => r.works || []).catch(() => []) });
+      } catch (e) { console.warn('[galaxy] 3D 初始化失败，回退 2D：', e); ok3d = false; }
+      if (!ok3d) {
+        if (starScene) starScene.destroy();
+        starScene = new StarScene(canvas, stars);
+      }
+    } finally {
+      wrap.classList.remove('loading');
     }
-    loader.classList.remove('on');
   }
   function renderLegend(cats) {
     const box = $('#star-legend'); if (!box) return;
@@ -590,7 +617,7 @@ const Views = (() => {
         </div>
         <div class="chips" id="chips"><span class="chip ${!libState.cat ? 'active' : ''}" data-cat="">全部</span></div>
       </section>
-      <div class="book-grid" id="book-grid"><div class="empty"><span class="spin"></span> 加载中…</div></div>
+      <div class="book-grid" id="book-grid">${skCards(8)}</div>
       <div class="pager" id="pager"></div>`;
     $('#s-btn').onclick = () => { libState.q = $('#q').value.trim(); libState.page = 1; loadLibrary(); };
     $('#q').addEventListener('keydown', e => { if (e.key === 'Enter') { libState.q = $('#q').value.trim(); libState.page = 1; loadLibrary(); } });
@@ -604,7 +631,7 @@ const Views = (() => {
   }
   async function loadLibrary() {
     const grid = $('#book-grid'); if (!grid) return;
-    grid.innerHTML = '<div class="empty"><span class="spin"></span> 加载中…</div>';
+    if (!grid.querySelector('.book-card')) grid.innerHTML = skCards(8);
     const r = await API.books({ q: libState.q, category: libState.cat, page: libState.page, pageSize: 24 });
     // 分类 chips 只在首次填充
     const chips = $('#chips');
@@ -612,7 +639,8 @@ const Views = (() => {
       chips.insertAdjacentHTML('beforeend', (r.categories || []).map(c =>
         `<span class="chip" data-cat="${esc(c)}">${esc(c)}</span>`).join(''));
     }
-    grid.innerHTML = r.books.length ? r.books.map(bookCard).join('') : '<div class="empty" style="padding:30px">没有找到相关图书，换个关键词试试</div>';
+    grid.innerHTML = r.books.length ? r.books.map((b, i) => bookCard(b, i)).join('')
+      : emptyState({ icon: '🔍', title: '没有找到相关图书', hint: '换个关键词或清空筛选再试试' });
     const pages = Math.max(1, Math.ceil(r.total / r.pageSize));
     const pager = $('#pager');
     pager.innerHTML = pages > 1 ? `
@@ -651,7 +679,7 @@ const Views = (() => {
         </div>
       </div>
       <div class="section-title">相关推荐</div>
-      <div class="grid">${r.related.length ? r.related.map(bookCard).join('') : '<div class="empty">暂无相关图书</div>'}</div>`;
+      <div class="grid">${r.related.length ? r.related.map((b, i) => bookCard(b, i)).join('') : emptyState({ icon: '📚', title: '暂无相关图书' })}</div>`;
     const db2 = $('#digest-btn');
     if (db2) db2.onclick = async () => {
       const box = $('#digest-box'); db2.disabled = true; db2.textContent = '生成中…';
@@ -678,7 +706,7 @@ const Views = (() => {
         ${(window.OFFLINE || window.STATIC_MODE) ? '' :
           `<div class="stars-hint">作品文件放在 <code>public/works/</code> 下 · 启动时自动上架 · 也可在管理端点「重新扫描」</div>`}
       </section>
-      <div id="stars-body"><div class="empty"><span class="spin"></span> 加载中…</div></div>`;
+      <div id="stars-body">${skCards(2)}</div>`;
     const r = await API.works({});
     const works = r.works || [];
     const body = $('#stars-body');
@@ -792,7 +820,7 @@ const Views = (() => {
           <a class="btn" href="${escAttr(src)}" target="_blank" rel="noopener noreferrer">▶ 在新窗口打开作品</a>
         </div>`;
     } else if (w.type === 'image' && payload) {
-      body = `<div class="work-image"><img src="${escAttr(src)}" alt="${escAttr(w.title)}"></div>`;
+      body = `<div class="work-image"><img src="${escAttr(src)}" alt="${escAttr(w.title)}" loading="lazy" decoding="async"></div>`;
     } else if (w.type === 'video' && payload) {
       body = `<div class="work-video"><video src="${escAttr(src)}" controls playsinline preload="metadata"></video></div>`;
     } else if (w.type === 'link' && payload) {
@@ -812,7 +840,7 @@ const Views = (() => {
             <h1>${esc(w.title)}</h1>
             <div class="work-detail-meta">
               <span class="star-chip" style="--cc:${CODE_COLORS[w.code] || CODE_COLORS.default}">${esc(w.code || '未命名星')}</span>
-              <span class="status">${esc(TYPE_LABEL[w.type] || w.type)}</span>
+              <span class="status status--type">${esc(TYPE_LABEL[w.type] || w.type)}</span>
               <span class="muted">第 ${w.issue_no} 期 · ${esc(w.org || '')}</span>
               ${w.members ? `<span class="muted">成员：${esc(w.members)}</span>` : ''}
             </div>
@@ -845,7 +873,7 @@ const Views = (() => {
         </div>
         <div class="stars-hint">${esc(Settings.get('news.sourceHint', ''))}</div>
       </section>
-      <div id="news-list" class="news-list"><div class="empty"><span class="spin"></span> 加载中…</div></div>`;
+      <div id="news-list" class="news-list">${skCards(3)}</div>`;
     $('#news-chips').addEventListener('click', e => {
       const c = e.target.closest('.chip'); if (!c) return;
       newsCat = c.dataset.cat;
@@ -860,14 +888,14 @@ const Views = (() => {
     const posts = r.posts || [];
     box.innerHTML = posts.length ? posts.map(p => `
       <a class="news-card" href="#/post/${p.id}">
-        ${p.cover ? `<div class="news-cover"><img src="${assetUrl(p.cover)}" alt=""></div>` : `<div class="news-cover news-cover-ph">${esc((p.category || '资讯').slice(0, 2))}</div>`}
+        ${p.cover ? `<div class="news-cover"><img src="${assetUrl(p.cover)}" alt="" loading="lazy" decoding="async"></div>` : `<div class="news-cover news-cover-ph">${esc((p.category || '资讯').slice(0, 2))}</div>`}
         <div class="news-body">
-          <div class="news-meta"><span class="status">${esc(p.category || '资讯')}</span><span class="muted">${fmtDate(p.published_at)}</span></div>
+          <div class="news-meta"><span class="status status--cat">${esc(p.category || '资讯')}</span><span class="muted">${fmtDate(p.published_at)}</span></div>
           <h3>${esc(p.title)}</h3>
           <p class="muted">${esc(p.summary || '')}</p>
           ${p.source_name ? `<div class="news-src">来源：${esc(p.source_name)}</div>` : ''}
         </div>
-      </a>`).join('') : '<div class="empty" style="padding:40px">该分类暂无内容</div>';
+      </a>`).join('') : emptyState({ icon: '📰', title: '该分类暂无内容', hint: '看看其他分类，或稍后再来' });
   }
 
   async function postDetail(id) {
@@ -878,12 +906,12 @@ const Views = (() => {
       <a class="btn ghost sm" href="#/news">← 返回资讯</a>
       <article class="post-detail" style="margin-top:14px">
         <div class="news-meta" style="margin-bottom:10px">
-          <span class="status">${esc(p.category || '资讯')}</span>
+          <span class="status status--cat">${esc(p.category || '资讯')}</span>
           <span class="muted">${fmtDate(p.published_at)}</span>
           ${p.source_name ? `<span class="muted">来源：${esc(p.source_name)}</span>` : ''}
         </div>
         <h1>${esc(p.title)}</h1>
-        ${p.cover ? `<div class="post-cover"><img src="${escAttr(safePayload(p.cover))}" alt=""></div>` : ''}
+        ${p.cover ? `<div class="post-cover"><img src="${escAttr(safePayload(p.cover))}" alt="" loading="lazy" decoding="async"></div>` : ''}
         <div class="post-content">${mdRender(p.content || p.summary || '')}</div>
         ${srcUrl ? `<div class="post-src"><a class="btn" href="${escAttr(srcUrl)}" target="_blank" rel="noopener noreferrer">🔗 跳转浏览器查看原文${p.source_name ? '（' + esc(p.source_name) + '）' : ''}</a>
           <div class="muted" style="font-size:11px;margin-top:8px;word-break:break-all">${esc(srcUrl)}</div></div>` : ''}

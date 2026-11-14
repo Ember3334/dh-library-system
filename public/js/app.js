@@ -63,7 +63,13 @@ function coverArtSVG(book) {
 function coverFallback(img) {
   const ph = document.createElement('div');
   ph.className = 'cover-art';
-  ph.innerHTML = coverArtSVG({ id: img.dataset.id, title: img.dataset.title, author: img.dataset.author, category: img.dataset.category });
+  // data-* 缺失时兜底，避免 SVG 书封出现「?」
+  ph.innerHTML = coverArtSVG({
+    id: img.dataset.id,
+    title: img.dataset.title || '未知书名',
+    author: img.dataset.author || '佚名',
+    category: img.dataset.category || ''
+  });
   if (img.parentNode) img.parentNode.replaceChild(ph, img);
 }
 window.coverFallback = coverFallback;

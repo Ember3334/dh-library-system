@@ -6,12 +6,20 @@ const fs = require('fs');
 const path = require('path');
 const db = require('./db');
 const settings = require('./settings');
+const covers = require('./covers');
+
+// 封面注入：与 server.js 保持一致，离线快照同样零 404
+const withCover = b => {
+  if (b && !b.cover && covers.hasCover(b.call_no)) b.cover = '/covers/' + b.call_no + '.jpg';
+  return b;
+};
 
 const OUT_FILE = path.join(__dirname, '../public/data/snapshot.js');
 
 function build(opts = {}) {
   const slim = !!opts.slim;
   const books = db.prepare('SELECT * FROM books ORDER BY id DESC').all().map(b => {
+    withCover(b);
     if (!slim) return b;
     return { ...b, intro: String(b.intro || '').slice(0, 160) };
   });

@@ -23,7 +23,14 @@ const manageAuth = require('./manage-auth');
 const settings = require('./settings');
 const validate = require('./validate');
 const scanner = require('./works-scanner');
+const covers = require('./covers');
 const ai = require('./ai');
+
+// 封面注入：covers/ 有真实 jpg 的书补上 cover 字段，前端只对有值的书发 <img>（零 404）
+function withCover(b) {
+  if (b && !b.cover && covers.hasCover(b.call_no)) b.cover = '/covers/' + b.call_no + '.jpg';
+  return b;
+}
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -64,7 +71,7 @@ app.get('/api/books', (req, res) => {
   const total = db.prepare(`SELECT COUNT(*) c FROM books ${where}`).get(...params).c;
   const pp = Math.min(toInt(pageSize, 24), 100);
   const off = (toInt(page, 1) - 1) * pp;
-  const rows = db.prepare(`SELECT * FROM books ${where} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...params, pp, off);
+  const rows = db.prepare(`SELECT * FROM books ${where} ORDER BY id DESC LIMIT ? OFFSET ?`).all(...params, pp, off).map(withCover);
   const cats = db.prepare("SELECT DISTINCT category FROM books WHERE category IS NOT NULL AND category<>''").all().map(r => r.category);
   res.json({ total, page: toInt(page, 1), pageSize: pp, books: rows, categories: cats });
 });
@@ -98,9 +105,9 @@ app.get('/api/overview', (req, res) => {
 });
 
 app.get('/api/books/:id', (req, res) => {
-  const book = db.prepare('SELECT * FROM books WHERE id=?').get(req.params.id);
+  const book = withCover(db.prepare('SELECT * FROM books WHERE id=?').get(req.params.id));
   if (!book) return res.status(404).json({ error: '未找到该书' });
-  const related = db.prepare('SELECT * FROM books WHERE category=? AND id<>? LIMIT 6').all(book.category, book.id);
+  const related = db.prepare('SELECT * FROM books WHERE category=? AND id<>? LIMIT 6').all(book.category, book.id).map(withCover);
   res.json({ book, related });
 });
 
