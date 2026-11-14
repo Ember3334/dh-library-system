@@ -542,6 +542,7 @@ const Views = (() => {
           </div>
           <div class="star-actions">
             <span class="star-count" id="star-count">—</span>
+            ${window.OFFLINE ? '' : '<button class="btn ghost sm" id="fly-btn" title="全屏第一人称穿越星系">🚀 进入漫游</button>'}
           </div>
         </div>
         <div class="star-stage">
@@ -587,6 +588,22 @@ const Views = (() => {
       }
     } finally {
       wrap.classList.remove('loading');
+    }
+    // 漫游入口：3D 可用才显示（2D 星空与离线态不支持）
+    const flyBtn = $('#fly-btn');
+    if (flyBtn) {
+      if (ok3d) {
+        flyBtn.style.display = '';
+        flyBtn.onclick = () => { if (window.Galaxy) window.Galaxy.toggleFly(); };
+        // 漫游状态同步按钮文案
+        flyBtn._sync = setInterval(() => {
+          const g = window.Galaxy && window.Galaxy.current;
+          if (!g || !g.flyMode) { clearInterval(flyBtn._sync); flyBtn.textContent = '🚀 进入漫游'; return; }
+          flyBtn.textContent = '↩ 退出漫游';
+        }, 600);
+      } else {
+        flyBtn.style.display = 'none';
+      }
     }
   }
   function renderLegend(cats) {

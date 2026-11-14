@@ -60,8 +60,8 @@ const GALAXY = (() => {
       this.canvas = canvas;
       this.books = books || [];
       this.works = (opts && opts.works) || [];
-      this.raf = null;
       this.disposed = false;
+      this.flyMode = false;
       this.labels = [];
       this.reduced = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       this.isMobile = /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
@@ -100,10 +100,15 @@ const GALAXY = (() => {
       this.raycaster = new T.Raycaster();
       this.raycaster.params.Points.threshold = 1.6;
       this.pointer = new T.Vector2(-10, -10);
+      // 俯视模式状态存档：进出漫游/VR 用
+      this.orbitState = { pos: this.camera.position.clone(), target: this.controls.target.clone(), fov: 55, autoRotate: this.controls.autoRotate };
       this.bindEvents();
       this.setupXR();
       this.resize();
-      this.loop();
+      // 统一渲染循环：WebXR 要求 setAnimationLoop（rAF 在 immersive 会话中会被暂停 → 头显黑屏）
+      this.clock = new T.Clock();
+      this._tick = () => this.tick();
+      this.renderer.setAnimationLoop(this._tick);
     }
 
     get stageEl() { return this.canvas.parentElement; }
@@ -229,14 +234,27 @@ const GALAXY = (() => {
       this._ro = new ResizeObserver(() => this.resize());
       this._ro.observe(this.stageEl);
       this._vis = () => {
-        if (document.hidden && this.raf) { cancelAnimationFrame(this.raf); this.raf = null; }
-        else if (!document.hidden && !this.raf && !this.disposed) this.loop();
+        // XR 会话中浏览器接管帧节奏（xr frame），不要动 setAnimationLoop
+        if (this.renderer.xr && this.renderer.xr.isPresenting) return;
+        if (document.hidden) this.renderer.setAnimationLoop(null);
+        else if (!this.disposed) this.renderer.setAnimationLoop(this._tick);
       };
       document.addEventListener('visibilitychange', this._vis);
     }
 
     pick() {
-      this.raycaster.setFromCamera(this.pointer, this.camera);
+      return this.pickByNDC(this.pointer);
+    }
+    // 双入口拾取：桌面 hover 用 NDC；漫游点击 / XR 手柄用射线
+    pickByNDC(ndc) {
+      this.raycaster.setFromCamera(ndc, this.camera);
+      return this._pickHits();
+    }
+    pickByRay(ray) {
+      this.raycaster.ray.copy(ray);
+      return this._pickHits();
+    }
+    _pickHits() {
       const hitsW = this.raycaster.intersectObjects(this.workSprites || [], false);
       if (hitsW.length) return hitsW[0].object;
       const hits = this.raycaster.intersectObject(this.bookPoints, false);
@@ -295,6 +313,8 @@ const GALAXY = (() => {
     }
 
     resize() {
+      // XR 帧缓冲由 XRWebGLLayer 管理，setSize 会破坏双眼视口
+      if (this.renderer.xr && this.renderer.xr.isPresenting) return;
       const el = this.stageEl;
       if (!el) return;
       const w = Math.min(4000, Math.max(320, el.clientWidth || 320));
@@ -304,34 +324,89 @@ const GALAXY = (() => {
       this.renderer.setSize(w, h, false);
     }
 
-    loop() {
+    // —— 模式切换：orbit（俯视轨道）/ fly（第一人称漫游，由 GalaxyFly 驱动）——
+    setMode(mode) {
       if (this.disposed) return;
-      this.raf = requestAnimationFrame(() => this.loop());
-      const t = performance.now() / 1000;
+      if (mode === 'fly' && !this.flyMode) {
+        this.orbitState = {
+          pos: this.camera.position.clone(),
+          target: this.controls.target.clone(),
+          fov: this.camera.fov,
+          autoRotate: this.controls.autoRotate
+        };
+        this.controls.enabled = false;
+        this.controls.autoRotate = false;
+        this.clearHover();
+        this.flyMode = true;
+        if (window.GalaxyFly) window.GalaxyFly.attach(this, T);
+        return true;
+      }
+      if (mode === 'orbit' && this.flyMode) {
+        this.flyMode = false;
+        if (window.GalaxyFly) window.GalaxyFly.detach(this);
+        return true;
+      }
+      return false;
+    }
+    // 漫游退出动画完成后的恢复（GalaxyFly 回调）
+    _restoreOrbit() {
+      this.camera.fov = this.orbitState.fov;
+      this.camera.updateProjectionMatrix();
+      this.camera.rotation.order = 'XYZ';
+      this.camera.position.copy(this.orbitState.pos);
+      this.controls.target.copy(this.orbitState.target);
+      this.controls.enabled = true;
+      this.controls.autoRotate = this.orbitState.autoRotate;
       this.controls.update();
+    }
+
+    // 主循环（统一入口：桌面 / 漫游 / XR 三态）
+    tick() {
+      if (this.disposed) return;
+      const dt = Math.min(this.clock.getDelta(), 0.05);
+      const t = performance.now() / 1000;
+      const xrPresenting = this.renderer.xr && this.renderer.xr.isPresenting;
+      const rigActive = window.GalaxyFly && window.GalaxyFly.hasRig(this);
+      if (rigActive) {
+        // 漫游或退出动画期间由 FlightRig 驱动相机（exit 阶段 flyMode 已为 false，仍要继续喂帧）
+        window.GalaxyFly.update(this, dt, t);
+      } else if (!xrPresenting) {
+        this.controls.update();
+      }
       if (this.core1) this.core1.scale.setScalar(34 + 1.6 * Math.sin(t * 0.9));
       if (this.workSprites) {
         this.workSprites.forEach((sp, i) => {
           sp.scale.setScalar(6.5 + 0.7 * Math.sin(t * 1.2 + i * 1.7));
         });
       }
-      for (const { el, pos } of this.labels) {
-        const p = pos.clone().project(this.camera);
-        const vis = p.z < 1;
-        el.style.display = vis ? 'block' : 'none';
-        if (vis) {
-          el.style.left = ((p.x * 0.5 + 0.5) * this.stageEl.clientWidth) + 'px';
-          el.style.top = ((-p.y * 0.5 + 0.5) * this.stageEl.clientHeight - 18) + 'px';
-        }
+      if (xrPresenting) {
+        // 头显中 DOM 标签/悬停无意义，全部跳过省 CPU
+        return this.renderer.render(this.scene, this.camera);
       }
-      this._hoverTick = (this._hoverTick || 0) + 1;
-      if (this._hoverTick % 3 === 0) this.hover();
+      if (rigActive) {
+        window.GalaxyFly.updateLabels(this, t);
+      } else {
+        const v = this._lv || (this._lv = new T.Vector3());
+        for (const { el, pos } of this.labels) {
+          v.copy(pos).project(this.camera);
+          const vis = v.z < 1;
+          el.style.display = vis ? 'block' : 'none';
+          if (vis) {
+            el.style.transform = 'translate3d(-50%,-100%,0)';
+            el.style.left = ((v.x * 0.5 + 0.5) * this.stageEl.clientWidth) + 'px';
+            el.style.top = ((-v.y * 0.5 + 0.5) * this.stageEl.clientHeight - 18) + 'px';
+          }
+        }
+        this._hoverTick = (this._hoverTick || 0) + 1;
+        if (this._hoverTick % 3 === 0) this.hover();
+      }
       this.renderer.render(this.scene, this.camera);
     }
 
     destroy() {
       this.disposed = true;
-      if (this.raf) cancelAnimationFrame(this.raf);
+      if (window.GalaxyFly) window.GalaxyFly.destroy(this);
+      if (this._tick) this.renderer.setAnimationLoop(null);
       if (this._ro) this._ro.disconnect();
       document.removeEventListener('visibilitychange', this._vis || (() => {}));
       if (this.controls) this.controls.dispose();
@@ -367,6 +442,17 @@ const GALAXY = (() => {
     }
   }
 
-  return { init, destroy() { if (instance) instance.destroy(); }, get active() { return !!instance; } };
+  return {
+    init,
+    destroy() { if (instance) instance.destroy(); },
+    get active() { return !!instance; },
+    get current() { return instance; },
+    // 俯视 ↔ 漫游切换（views.js 的「进入漫游」按钮调用）
+    toggleFly() {
+      if (!instance) return false;
+      return instance.setMode(instance.flyMode ? 'orbit' : 'fly');
+    },
+    exitFly() { if (instance && instance.flyMode) instance.setMode('orbit'); }
+  };
 })();
 window.Galaxy = GALAXY;
