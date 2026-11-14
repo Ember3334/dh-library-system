@@ -1,14 +1,15 @@
 {
-  "name": "数字人文学院智能图书室",
-  "short_name": "DH 图书室",
-  "description": "AI + 智能图书管理系统 · 馆藏检索 · 借阅审批 · 数据大屏",
-  "start_url": "/",
-  "scope": "/",
+  "name": "数文拾光 · 数字人文平台",
+  "short_name": "数文拾光",
+  "description": "宇宙 · 书库 · 摘星辰 · 资讯 —— 数字人文综合展示平台",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
-  "orientation": "portrait-primary",
+  "orientation": "any",
   "background_color": "#f7efe2",
   "theme_color": "#c2693b",
   "icons": [
-    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "maskable" }
   ]
 }

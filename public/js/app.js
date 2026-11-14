@@ -5,11 +5,6 @@
 //   ② 静态发布版（window.STATIC_MODE，公开 GET 走 data/*.json）——只读
 //   ③ 离线快照（file:// 双击 index.html，读 window.__SNAPSHOT__）——只读
 
-function colorFor(str) {
-  let h = 0; for (let i = 0; i < (str || '?').length; i++) h = (h * 31 + str.charCodeAt(i)) % 360;
-  return `linear-gradient(135deg,hsl(${h},68%,56%),hsl(${(h + 48) % 360},68%,46%))`;
-}
-
 function toast(msg, type) {
   const t = document.getElementById('toast');
   t.textContent = msg; t.className = 'hidden ' + (type || '');
@@ -362,6 +357,16 @@ function applySiteText() {
     let m = document.querySelector('meta[name="description"]');
     if (!m) { m = document.createElement('meta'); m.name = 'description'; document.head.appendChild(m); }
     m.content = desc;
+    // 分享卡片（微信/Telegram/QQ 等读 og: 标签）
+    const og = (prop, val) => {
+      let el = document.querySelector(`meta[property="${prop}"]`);
+      if (!el) { el = document.createElement('meta'); el.setAttribute('property', prop); document.head.appendChild(el); }
+      el.setAttribute('content', val);
+    };
+    og('og:title', name + ' · 数字人文平台');
+    og('og:description', desc);
+    og('og:type', 'website');
+    og('og:locale', 'zh_CN');
   }
 }
 
@@ -397,11 +402,32 @@ function route() {
   return run(Views.home);
 }
 
-function applyTheme() { const t = localStorage.getItem('dh_theme') || 'light'; document.documentElement.dataset.theme = t; }
+// 主题：用户手动选择持久化；未选择时跟随系统 prefers-color-scheme
+const _sysDark = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+function applyTheme() {
+  const t = localStorage.getItem('dh_theme') || (_sysDark && _sysDark.matches ? 'dark' : 'light');
+  document.documentElement.dataset.theme = t;
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = t === 'dark' ? '#1b1510' : '#c2693b';
+}
 function toggleTheme() {
   const cur = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
-  document.documentElement.dataset.theme = cur; localStorage.setItem('dh_theme', cur); updateThemeBtn();
+  document.documentElement.dataset.theme = cur;
+  localStorage.setItem('dh_theme', cur);
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.content = cur === 'dark' ? '#1b1510' : '#c2693b';
+  updateThemeBtn();
   window.dispatchEvent(new CustomEvent('dh:theme', { detail: { theme: cur } }));
+}
+// 系统主题变化时跟随（仅用户未手动选择过）
+if (_sysDark) {
+  const onSysTheme = () => {
+    if (localStorage.getItem('dh_theme')) return;
+    applyTheme(); updateThemeBtn();
+    window.dispatchEvent(new CustomEvent('dh:theme', { detail: { theme: document.documentElement.dataset.theme } }));
+  };
+  if (_sysDark.addEventListener) _sysDark.addEventListener('change', onSysTheme);
+  else if (_sysDark.addListener) _sysDark.addListener(onSysTheme);
 }
 function updateThemeBtn() {
   const b = document.getElementById('theme-btn');

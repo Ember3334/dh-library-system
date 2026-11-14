@@ -428,6 +428,31 @@ const Views = (() => {
         : `<button class="btn ghost sm" id="${o.actionId || 'empty-action'}">${esc(o.actionText)}</button>`) : ''}
     </div>`;
   }
+  // 详情页「标签-值」格子项（.kv 容器内使用）
+  function kv(label, val) {
+    return `<div class="pill"><span class="k">${label}</span><span class="v">${val || '—'}</span></div>`;
+  }
+  // 页码式分页：1 … p-2 p-1 p p+1 p+2 … N
+  function buildPager(page, pages, total, unit) {
+    const totalHtml = `<span class="pager-total muted">共 ${total} ${unit || '条'}${pages > 1 ? ` · 第 ${page}/${pages} 页` : ''}</span>`;
+    if (pages <= 1) return totalHtml;
+    const nums = [];
+    const push = n => { if (n >= 1 && n <= pages && !nums.includes(n)) nums.push(n); };
+    [1, 2, pages - 1, pages].forEach(push);
+    for (let n = page - 2; n <= page + 2; n++) push(n);
+    nums.sort((a, b) => a - b);
+    let out = '';
+    let prev = 0;
+    for (const n of nums) {
+      if (prev && n - prev > 1) out += '<span class="pg-gap">…</span>';
+      out += `<button class="pg ${n === page ? 'on' : ''}" data-p="${n}" ${n === page ? 'aria-current="page"' : ''}>${n}</button>`;
+      prev = n;
+    }
+    return `${totalHtml}
+      <button class="pg pg-nav" data-p="${Math.max(1, page - 1)}" ${page <= 1 ? 'disabled' : ''} aria-label="上一页">‹</button>
+      ${out}
+      <button class="pg pg-nav" data-p="${Math.min(pages, page + 1)}" ${page >= pages ? 'disabled' : ''} aria-label="下一页">›</button>`;
+  }
   // 星辰代号 → 星徽 SVG（作品封面占位）
   const CODE_COLORS = { '北极星': '#5a8dd6', '启明星': '#e8a53c', '织女星': '#b57ad0', '天狼星': '#d66a6a', '牵牛星': '#4aa8a0', '东壁星': '#c78a3e', default: '#8a7ad0' };
   function starBadge(code, size) {
@@ -519,11 +544,13 @@ const Views = (() => {
   // 三、宇宙首页（3D 星系，降级 2D 星空）
   // ==========================================================
   let starScene = null;
+  let _readerEsc = null;
   async function home() {
     const [cats, ov] = await Promise.all([API.categories().catch(() => []), API.overview().catch(() => ({}))]);
     const S = k => Settings.get(k, '');
     app().innerHTML = `
       <section class="hero">
+        <div class="hero-kicker">${esc(S('site.tagline') || '宇宙 · 书库 · 摘星辰 · 资讯')}</div>
         <h1>${esc(S('home.h1'))} <span class="g">${esc(S('home.h1Accent'))}</span></h1>
         <p>${esc(S('home.sub'))}</p>
         <div class="search-row">
@@ -588,6 +615,13 @@ const Views = (() => {
       }
     } finally {
       wrap.classList.remove('loading');
+    }
+    // 离线快照态：3D 必然回退 2D（file:// 禁 import），给用户一句解释
+    if (!ok3d && window.OFFLINE) {
+      const hint = document.createElement('div');
+      hint.className = 'stars-hint offline-3d';
+      hint.textContent = '📴 离线快照模式：3D 星系 / 沉浸漫游 / VR 需通过本地服务打开（双击「启动平台.bat」）';
+      wrap.appendChild(hint);
     }
     // 漫游入口：3D 可用才显示（2D 星空与离线态不支持）
     const flyBtn = $('#fly-btn');
@@ -660,14 +694,17 @@ const Views = (() => {
       : emptyState({ icon: '🔍', title: '没有找到相关图书', hint: '换个关键词或清空筛选再试试' });
     const pages = Math.max(1, Math.ceil(r.total / r.pageSize));
     const pager = $('#pager');
-    pager.innerHTML = pages > 1 ? `
-      <button class="btn ghost sm" id="pg-prev" ${r.page <= 1 ? 'disabled' : ''}>← 上一页</button>
-      <span class="muted">第 ${r.page} / ${pages} 页 · 共 ${r.total} 本</span>
-      <button class="btn ghost sm" id="pg-next" ${r.page >= pages ? 'disabled' : ''}>下一页 →</button>` :
-      `<span class="muted">共 ${r.total} 本</span>`;
-    const prev = $('#pg-prev'), next = $('#pg-next');
-    if (prev) prev.onclick = () => { libState.page--; loadLibrary(); window.scrollTo(0, 0); };
-    if (next) next.onclick = () => { libState.page++; loadLibrary(); window.scrollTo(0, 0); };
+    pager.innerHTML = buildPager(r.page, pages, r.total, '本');
+    pager.onclick = e => {
+      const btn = e.target.closest('.pg');
+      if (!btn || btn.disabled) return;
+      const p = parseInt(btn.dataset.p, 10);
+      if (!p || p === libState.page) return;
+      libState.page = p;
+      loadLibrary();
+      const grid = $('#book-grid');
+      if (grid) grid.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
   }
 
   // ==========================================================
@@ -683,10 +720,14 @@ const Views = (() => {
         ${coverBlock(b)}
         <div>
           <h1>${b.title}</h1>
-          <div class="line">作者：${b.author || '未知'}</div>
-          <div class="line">出版：${b.publisher || '—'} ${b.year ? '· ' + b.year : ''}</div>
-          <div class="line">分类：${b.category || '—'} ｜ 馆藏位置：${b.location || '—'}</div>
-          <div class="line">索书号：${b.call_no || '—'} ｜ 定价：¥${b.price || '—'}</div>
+          <div class="kv kv-grid">
+            ${kv('作者', esc(b.author || '未知'))}
+            ${kv('出版', esc(b.publisher || '—') + (b.year ? ' · ' + b.year : ''))}
+            ${kv('分类', esc(b.category || '—'))}
+            ${kv('馆藏位置', esc(b.location || '—'))}
+            ${kv('索书号', esc(b.call_no || '—'))}
+            ${kv('定价', b.price ? '¥' + b.price : '—')}
+          </div>
           <div class="tagrow" style="margin:12px 0">${tags}</div>
           <div class="intro">${b.intro || '暂无简介。'}</div>
           <div style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap">
@@ -728,8 +769,11 @@ const Views = (() => {
     const works = r.works || [];
     const body = $('#stars-body');
     if (!works.length) {
-      body.innerHTML = `<div class="empty" style="padding:40px">${esc(Settings.get('works.emptyTitle', '成果整理中，敬请期待 ✨'))}
-        <br><span class="muted">${esc(Settings.get('works.emptyHint', ''))}</span></div>`;
+      body.innerHTML = emptyState({
+        icon: '✨',
+        title: Settings.get('works.emptyTitle', '成果整理中，敬请期待 ✨'),
+        hint: Settings.get('works.emptyHint', '')
+      });
       return;
     }
     const byIssue = new Map();
@@ -742,13 +786,13 @@ const Views = (() => {
           <span class="issue-count muted">${list.length} 件作品</span>
         </div>
         <div class="work-grid">
-          ${list.map(w => `
-            <div class="work-card" data-id="${w.id}">
+          ${list.map((w, i) => `
+            <div class="work-card" data-id="${w.id}" style="--i:${i}">
               ${workCoverBlock(w)}
               <div class="work-body">
                 <div class="work-code"><span class="star-chip" style="--cc:${CODE_COLORS[w.code] || CODE_COLORS.default}">${starBadge(w.code || '', 20)} ${esc(w.code || '未命名星')}</span></div>
                 <h3>${esc(w.title)}</h3>
-                <p class="work-summary">${esc((w.summary || '').slice(0, 80))}${(w.summary || '').length > 80 ? '…' : ''}</p>
+                <p class="work-summary">${esc(w.summary || '')}</p>
                 <div class="work-meta">
                   ${w.members ? `<span>👥 ${esc(w.members)}</span>` : ''}
                   <span>${fmtDate(w.published_at)}</span>
@@ -802,11 +846,12 @@ const Views = (() => {
           </div>
         </div>
         <div class="reader-stage">
+          <div class="reader-scrim" id="reader-scrim" hidden></div>
           <iframe class="reader-frame" src="${escAttr(src)}"
             sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-forms allow-modals allow-downloads"
             allow="fullscreen; autoplay; clipboard-read; clipboard-write"
             title="${escAttr(w.title)}"></iframe>
-          <div class="reader-drawer" id="reader-drawer">
+          <div class="reader-drawer" id="reader-drawer" role="dialog" aria-label="作品简介">
             <div class="reader-drawer-head">
               <b>作品简介</b><button class="btn ghost sm" id="reader-drawer-close">收起</button>
             </div>
@@ -819,8 +864,21 @@ const Views = (() => {
           </div>
         </div>`;
       const drawer = $('#reader-drawer');
-      $('#reader-info').onclick = () => drawer.classList.toggle('on');
-      $('#reader-drawer-close').onclick = () => drawer.classList.remove('on');
+      const scrim = $('#reader-scrim');
+      const frame = $('.reader-frame');
+      const setDrawer = open => {
+        drawer.classList.toggle('on', open);
+        scrim.hidden = !open;
+        // 打开抽屉时让 iframe 不吞点击，遮罩才收得到事件
+        if (frame) frame.style.pointerEvents = open ? 'none' : '';
+        $('#reader-info').setAttribute('aria-expanded', String(open));
+      };
+      $('#reader-info').onclick = () => setDrawer(!drawer.classList.contains('on'));
+      $('#reader-drawer-close').onclick = () => setDrawer(false);
+      scrim.onclick = () => setDrawer(false);
+      if (_readerEsc) document.removeEventListener('keydown', _readerEsc);
+      _readerEsc = e => { if (e.key === 'Escape' && drawer.classList.contains('on')) setDrawer(false); };
+      document.addEventListener('keydown', _readerEsc);
       $('#reader-copy').onclick = async () => {
         const url = location.href;
         try { await navigator.clipboard.writeText(url); toast('链接已复制', 'ok'); }
@@ -903,8 +961,8 @@ const Views = (() => {
     const box = $('#news-list'); if (!box) return;
     const r = await API.posts(newsCat ? { category: newsCat } : {});
     const posts = r.posts || [];
-    box.innerHTML = posts.length ? posts.map(p => `
-      <a class="news-card" href="#/post/${p.id}">
+    box.innerHTML = posts.length ? posts.map((p, i) => `
+      <a class="news-card" href="#/post/${p.id}" style="--i:${i}">
         ${p.cover ? `<div class="news-cover"><img src="${assetUrl(p.cover)}" alt="" loading="lazy" decoding="async"></div>` : `<div class="news-cover news-cover-ph">${esc((p.category || '资讯').slice(0, 2))}</div>`}
         <div class="news-body">
           <div class="news-meta"><span class="status status--cat">${esc(p.category || '资讯')}</span><span class="muted">${fmtDate(p.published_at)}</span></div>
@@ -1356,10 +1414,6 @@ const Views = (() => {
       } catch (e) { box.textContent = '❌ ' + e.message; }
       btn.disabled = false; btn.textContent = '生成离线快照';
     };
-  }
-
-  function kpi(k, v, color) {
-    return `<div class="kpi"><div class="v" ${color ? `style="color:${color}"` : ''}>${v}</div><div class="k">${k}</div></div>`;
   }
 
   return { home, library, bookDetail, starsView, workDetail, news, postDetail, manage, cleanupStars };
