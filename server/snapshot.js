@@ -10,7 +10,7 @@ const covers = require('./covers');
 
 // 封面注入：与 server.js 保持一致，离线快照同样零 404
 const withCover = b => {
-  if (b && !b.cover && covers.hasCover(b.call_no)) b.cover = '/covers/' + b.call_no + '.jpg';
+  if (b && !b.cover) { const u = covers.coverUrl(b.call_no); if (u) b.cover = u; }
   return b;
 };
 

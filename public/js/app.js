@@ -264,13 +264,14 @@ const API = {
   mediaList() { return this.req('GET', '/api/manage/media'); },
   deleteMedia(p, force) { return this.req('DELETE', '/api/manage/media?path=' + encodeURIComponent(p) + (force ? '&force=1' : '')); },
   snapshot() { return this.req('POST', '/api/manage/snapshot', {}); },
-  // 上传走 XHR 以便显示进度
-  upload(file, kind, onProgress) {
+  // 上传走 XHR 以便显示进度；多字段/多文件统一走 xhrUpload
+  xhrUpload({ url, fields = {}, files = [], onProgress }) {
     return new Promise((resolve, reject) => {
       const fd = new FormData();
-      fd.append('file', file);
+      Object.entries(fields).forEach(([k, v]) => fd.append(k, v));
+      files.forEach(f => fd.append(f.name, f.file, f.filename || f.file.name));
       const xhr = new XMLHttpRequest();
-      xhr.open('POST', apiUrl('/api/manage/upload?kind=' + encodeURIComponent(kind || 'file')));
+      xhr.open('POST', apiUrl(url));
       if (State.manageToken) xhr.setRequestHeader('Authorization', 'Bearer ' + State.manageToken);
       if (xhr.upload && onProgress) {
         xhr.upload.onprogress = e => { if (e.lengthComputable) onProgress(Math.round(e.loaded / e.total * 100)); };
@@ -285,6 +286,30 @@ const API = {
       xhr.send(fd);
     });
   },
+  upload(file, kind, onProgress) {
+    return this.xhrUpload({ url: '/api/manage/upload?kind=' + encodeURIComponent(kind || 'file'), files: [{ name: 'file', file }], onProgress });
+  },
+  // 图书封面：直接落 public/covers/<索书号>.<jpg|png|webp>
+  uploadCover(file, callNo, onProgress) {
+    return this.xhrUpload({ url: '/api/manage/books/cover?call_no=' + encodeURIComponent(callNo || ''), files: [{ name: 'file', file }], onProgress });
+  },
+  // HTML 作品直传：服务端自动建 public/works/<期号-代号-标题>/ 并扫描入库
+  uploadWorkHtml(file, assets, fields, onProgress) {
+    return this.xhrUpload({
+      url: '/api/manage/works/upload-html',
+      fields,
+      files: [{ name: 'file', file }].concat((assets || []).map(f => ({ name: 'assets', file: f }))),
+      onProgress
+    });
+  },
+  // ---- 馆藏图书管理 ----
+  manageBooks(q, page, pageSize) {
+    const qs = new URLSearchParams({ q: q || '', page: page || 1, pageSize: pageSize || 20 }).toString();
+    return this.req('GET', '/api/manage/books?' + qs);
+  },
+  saveBook(id, b) { return id ? this.req('PUT', '/api/manage/books/' + id, b) : this.req('POST', '/api/manage/books', b); },
+  deleteBook(id) { return this.req('DELETE', '/api/manage/books/' + id); },
+  importBooks(payload) { return this.req('POST', '/api/manage/books/import', payload); },
   publish() { return this.req('POST', '/api/publish', {}); }
 };
 

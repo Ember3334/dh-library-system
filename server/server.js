@@ -19,9 +19,9 @@ const scanner = require('./works-scanner');
 const covers = require('./covers');
 const ai = require('./ai');
 
-// 封面注入：covers/ 有真实 jpg 的书补上 cover 字段，前端只对有值的书发 <img>（零 404）
+// 封面注入：covers/ 有真实图片的书补上 cover 字段，前端只对有值的书发 <img>（零 404）
 function withCover(b) {
-  if (b && !b.cover && covers.hasCover(b.call_no)) b.cover = '/covers/' + b.call_no + '.jpg';
+  if (b && !b.cover) { const u = covers.coverUrl(b.call_no); if (u) b.cover = u; }
   return b;
 }
 
@@ -298,6 +298,203 @@ app.delete('/api/manage/posts/:id', manageAuth.requireFounder, (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- 馆藏图书 CRUD（v2.4：管理端直添数据） ----------
+// 不加唯一索引：存量 696 条可能已有重复索书号，加索引会让服务起不来；去重靠查询。
+// 索书号字符集刻意收紧（字母/数字/._-），因为它同时用作 public/covers/ 的封面文件名。
+const CALL_NO_RE = /^[A-Za-z0-9._\-]{1,32}$/;
+
+function cleanBook(b, old) {
+  const o = old || {};
+  const callNo = String(b.call_no ?? o.call_no ?? '').trim();
+  if (callNo && !CALL_NO_RE.test(callNo)) {
+    return { error: '索书号只允许字母、数字、点、下划线、短横线（≤32 位）——它同时用作封面文件名' };
+  }
+  const total = Math.max(0, toInt(b.total ?? o.total, 1));
+  const available = Math.min(Math.max(0, toInt(b.available ?? o.available, total)), total);
+  return {
+    call_no: callNo,
+    isbn: String(b.isbn ?? o.isbn ?? '').trim(),
+    title: String(b.title ?? o.title ?? '').trim(),
+    author: String(b.author ?? o.author ?? '').trim(),
+    publisher: String(b.publisher ?? o.publisher ?? '').trim(),
+    year: String(b.year ?? o.year ?? '').trim(),
+    price: String(b.price ?? o.price ?? '').trim(),
+    category: String(b.category ?? o.category ?? '').trim(),
+    tags: String(b.tags ?? o.tags ?? '').trim(),
+    cover: validate.assetPath(b.cover ?? o.cover ?? '') || '',
+    location: String(b.location ?? o.location ?? '').trim(),
+    intro: String(b.intro ?? o.intro ?? ''),
+    total, available
+  };
+}
+function bookRow(id) { return withCover(db.prepare('SELECT * FROM books WHERE id=?').get(id)); }
+
+app.get('/api/manage/books', manageAuth.requireFounder, (req, res) => {
+  const q = String(req.query.q || '').trim().toLowerCase();
+  const page = Math.max(1, toInt(req.query.page, 1));
+  const pageSize = Math.min(100, Math.max(5, toInt(req.query.pageSize, 20)));
+  let where = '', params = [];
+  if (q) {
+    const like = '%' + q.replace(/([%_\\])/g, '\\$1') + '%';
+    where = `WHERE LOWER(title) LIKE ? ESCAPE '\\' OR LOWER(IFNULL(author,'')) LIKE ? ESCAPE '\\'
+      OR LOWER(IFNULL(call_no,'')) LIKE ? ESCAPE '\\' OR LOWER(IFNULL(tags,'')) LIKE ? ESCAPE '\\'`;
+    params = [like, like, like, like];
+  }
+  const total = db.prepare(`SELECT COUNT(*) c FROM books ${where}`).get(...params).c;
+  const items = db.prepare(`SELECT * FROM books ${where} ORDER BY id DESC LIMIT ? OFFSET ?`)
+    .all(...params, pageSize, (page - 1) * pageSize).map(withCover);
+  res.json({ items, total, page, pages: Math.max(1, Math.ceil(total / pageSize)) });
+});
+
+app.post('/api/manage/books', manageAuth.requireFounder, (req, res) => {
+  const b = cleanBook(req.body || {});
+  if (b.error) return res.status(400).json({ error: b.error });
+  if (!b.title) return res.status(400).json({ error: '书名必填' });
+  if (b.call_no) {
+    const dup = db.prepare('SELECT id FROM books WHERE call_no=?').get(b.call_no);
+    if (dup) return res.status(409).json({ error: `索书号 ${b.call_no} 已存在（id=${dup.id}），修改请用「编辑」` });
+  }
+  const info = db.prepare(`INSERT INTO books (call_no,isbn,title,author,publisher,year,price,category,tags,cover,location,intro,total,available)
+    VALUES (@call_no,@isbn,@title,@author,@publisher,@year,@price,@category,@tags,@cover,@location,@intro,@total,@available)`).run(b);
+  res.json({ book: bookRow(info.lastInsertRowid) });
+});
+
+app.put('/api/manage/books/:id', manageAuth.requireFounder, (req, res) => {
+  const old = db.prepare('SELECT * FROM books WHERE id=?').get(req.params.id);
+  if (!old) return res.status(404).json({ error: '未找到该书' });
+  const b = cleanBook(req.body || {}, old);
+  if (b.error) return res.status(400).json({ error: b.error });
+  if (!b.title) return res.status(400).json({ error: '书名必填' });
+  if (b.call_no) {
+    const dup = db.prepare('SELECT id FROM books WHERE call_no=? AND id<>?').get(b.call_no, old.id);
+    if (dup) return res.status(409).json({ error: `索书号 ${b.call_no} 已被 id=${dup.id} 使用` });
+  }
+  db.prepare(`UPDATE books SET call_no=@call_no,isbn=@isbn,title=@title,author=@author,publisher=@publisher,year=@year,
+    price=@price,category=@category,tags=@tags,cover=@cover,location=@location,intro=@intro,total=@total,available=@available
+    WHERE id=@id`).run({ ...b, id: old.id });
+  res.json({ book: bookRow(old.id) });
+});
+
+app.delete('/api/manage/books/:id', manageAuth.requireFounder, (req, res) => {
+  const info = db.prepare('DELETE FROM books WHERE id=?').run(req.params.id);
+  if (info.changes === 0) return res.status(404).json({ error: '未找到该书' });
+  res.json({ ok: true });
+});
+
+// 批量导入：{ rows:[...] } 直接用，或 { text, format:'json'|'csv' } 先解析。
+// 幂等：索书号相同 → 更新（不动封面/复本数），否则新增。
+const CSV_HEAD = ['索书号', '书名', '作者', '出版社', '年份', '定价', '分类', '标签', '馆藏位置', '简介'];
+function parseCsvLine(line) {
+  const out = []; let cur = '', inQ = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQ) {
+      if (ch === '"') { if (line[i + 1] === '"') { cur += '"'; i++; } else inQ = false; }
+      else cur += ch;
+    } else if (ch === '"') inQ = true;
+    else if (ch === ',' || ch === '\t') { out.push(cur); cur = ''; }
+    else cur += ch;
+  }
+  out.push(cur);
+  return out.map(s => s.trim());
+}
+function parseBookRows(body) {
+  if (Array.isArray(body.rows)) return { rows: body.rows, errors: [] };
+  const text = String(body.text || '');
+  if (!text.trim()) return { rows: [], errors: ['内容为空'] };
+  if (body.format === 'csv' || (!body.format && !text.trim().startsWith('['))) {
+    const lines = text.split(/\r?\n/).filter(l => l.trim());
+    const header = parseCsvLine(lines.shift() || '');
+    const idx = {};
+    header.forEach((h, i) => { const k = CSV_HEAD.indexOf(h.replace(/\s/g, '')); if (k >= 0) idx[CSV_HEAD[k]] = i; });
+    if (idx['书名'] === undefined) {
+      return { rows: [], errors: [`CSV 首行需含「书名」列。表头示例：${CSV_HEAD.join(',')}`] };
+    }
+    const pick = (c, name) => idx[name] !== undefined ? (c[idx[name]] || '') : '';
+    const rows = [], errors = [];
+    lines.forEach((line, ln) => {
+      const c = parseCsvLine(line);
+      if (!c.some(x => x)) return;
+      const title = pick(c, '书名');
+      if (!title) { errors.push(`第 ${ln + 2} 行缺少书名，已跳过`); return; }
+      rows.push({
+        call_no: pick(c, '索书号'), title,
+        author: pick(c, '作者'), publisher: pick(c, '出版社'), year: pick(c, '年份'),
+        price: pick(c, '定价'), category: pick(c, '分类'), tags: pick(c, '标签'),
+        location: pick(c, '馆藏位置'), intro: pick(c, '简介')
+      });
+    });
+    return { rows, errors };
+  }
+  try {
+    const arr = JSON.parse(text);
+    if (!Array.isArray(arr)) return { rows: [], errors: ['JSON 需为数组，如 [{"call_no":"I1-01","title":"…"}]'] };
+    return { rows: arr, errors: [] };
+  } catch (e) { return { rows: [], errors: ['JSON 解析失败：' + e.message] }; }
+}
+
+app.post('/api/manage/books/import', manageAuth.requireFounder, (req, res) => {
+  const { rows, errors } = parseBookRows(req.body || {});
+  let created = 0, updated = 0, skipped = 0;
+  const fail = [...errors];
+  const ins = db.prepare(`INSERT INTO books (call_no,isbn,title,author,publisher,year,price,category,tags,cover,location,intro,total,available)
+    VALUES (@call_no,@isbn,@title,@author,@publisher,@year,@price,@category,@tags,@cover,@location,@intro,@total,@available)`);
+  const upd = db.prepare(`UPDATE books SET title=@title,author=@author,publisher=@publisher,year=@year,price=@price,
+    category=@category,tags=@tags,location=@location,intro=@intro WHERE id=@id`);
+  db.transaction((list) => {
+    for (const raw of list) {
+      const b = cleanBook(raw);
+      if (b.error || !b.title) {
+        skipped++;
+        if (fail.length < 5) fail.push(`「${String(raw.title || raw.call_no || '(无书名)')}」：${b.error || '缺少书名'}`);
+        continue;
+      }
+      const dup = b.call_no ? db.prepare('SELECT id FROM books WHERE call_no=?').get(b.call_no) : null;
+      if (dup) { upd.run({ ...b, id: dup.id }); updated++; }
+      else { ins.run(b); created++; }
+    }
+  })(rows);
+  res.json({ created, updated, skipped, errors: fail, total: rows.length });
+});
+
+// 图书封面专用通道：直接落 public/covers/<索书号>.<ext>，写完即时刷新索引
+const coverUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter(req, file, cb) {
+    const ext = (path.extname(file.originalname || '').slice(1) || '').toLowerCase();
+    if (!['jpg', 'jpeg', 'png', 'webp'].includes(ext)) return cb(new Error('封面只支持 jpg / png / webp'));
+    if (file.mimetype && !/^image\/(jpeg|png|webp)$/i.test(file.mimetype)) return cb(new Error('封面内容类型不匹配'));
+    cb(null, true);
+  }
+});
+app.post('/api/manage/books/cover', manageAuth.requireFounder, (req, res) => {
+  const callNo = String(req.query.call_no || '').trim();
+  if (!CALL_NO_RE.test(callNo)) {
+    return res.status(400).json({ error: '需先填写合法索书号（字母/数字/._-，≤32 位）再上传封面' });
+  }
+  coverUpload.single('file')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: '封面上传失败：' + (err.code === 'LIMIT_FILE_SIZE' ? '超过 5MB' : err.message) });
+    if (!req.file) return res.status(400).json({ error: '未收到文件' });
+    const head = req.file.buffer.subarray(0, 16);
+    const isImg = (head[0] === 0xFF && head[1] === 0xD8)                    // jpg
+      || (head[0] === 0x89 && head[1] === 0x50)                             // png
+      || (head.subarray(0, 4).toString('latin1') === 'RIFF' && head.subarray(8, 12).toString('latin1') === 'WEBP');
+    if (!isImg) return res.status(400).json({ error: '文件内容与图片类型不符，已拒绝' });
+    const ext = (path.extname(req.file.originalname || '').slice(1) || 'jpg').toLowerCase().replace('jpeg', 'jpg');
+    fs.mkdirSync(covers.COVERS_DIR, { recursive: true });
+    // 同索书号换格式时清掉旧文件，避免索引歧义
+    for (const f of fs.readdirSync(covers.COVERS_DIR)) {
+      if (f.startsWith(callNo + '.') && f.toLowerCase() !== `${callNo}.${ext}`) {
+        try { fs.unlinkSync(path.join(covers.COVERS_DIR, f)); } catch (e) {}
+      }
+    }
+    fs.writeFileSync(path.join(covers.COVERS_DIR, `${callNo}.${ext}`), req.file.buffer);
+    covers.invalidate();
+    res.json({ url: `/covers/${callNo}.${ext}`, size: req.file.size, call_no: callNo });
+  });
+});
+
 // ---------- 文件上传（multipart → public/media/） ----------
 const MEDIA_DIR = path.join(__dirname, '../public/media');
 // 注意：html 已从媒体白名单移除 —— /media/*.html 与站点同源，能直接读管理 token；
@@ -394,6 +591,91 @@ app.post('/api/manage/upload', manageAuth.requireFounder, (req, res) => {
     }
     const rel = '/media/' + path.relative(MEDIA_DIR, req.file.path).replace(/\\/g, '/');
     res.json({ url: rel, size: req.file.size, kind, limitMB: UPLOAD_LIMIT_MB[kind] });
+  });
+});
+
+// ---------- HTML 作品直传（v2.4：上传即建 public/works/<期号-代号-标题>/ 目录） ----------
+// 只收创始人上传；阅读页始终以 iframe sandbox 运行。
+// 安全说明：/works/*.html 与站点同源（与手工放置的目录一致），不做额外隔离——README 有注明。
+const WORKS_DIR = path.join(__dirname, '../public/works');
+const workHtmlUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 20 * 1024 * 1024, files: 21 },
+  fileFilter(req, file, cb) {
+    const ext = (path.extname(file.originalname || '').slice(1) || '').toLowerCase();
+    if (file.fieldname === 'file') {
+      if (!['html', 'htm'].includes(ext)) return cb(new Error('作品主文件只支持 .html / .htm'));
+      if (file.mimetype && !/^text\/html/i.test(file.mimetype) && file.mimetype !== 'application/octet-stream') {
+        return cb(new Error('主文件内容类型需为 text/html'));
+      }
+    } else if (file.fieldname === 'assets') {
+      if (/[\\/\u0000-\u001f]/.test(file.originalname || '')) return cb(new Error('资源文件名不允许包含路径分隔符'));
+    }
+    cb(null, true);
+  }
+});
+
+function slugify(s, max = 40) {
+  return String(s || '')
+    .replace(/[\u0000-\u001f\\/:*?"<>|]/g, '')
+    .replace(/\s+/g, '-')
+    .replace(/^[.\-_]+|[.\-_]+$/g, '')
+    .slice(0, max) || '未命名';
+}
+
+app.post('/api/manage/works/upload-html', manageAuth.requireFounder, (req, res) => {
+  workHtmlUpload.fields([{ name: 'file', maxCount: 1 }, { name: 'assets', maxCount: 20 }])(req, res, (err) => {
+    if (err) {
+      return res.status(400).json({ error: '上传失败：' + (err.code === 'LIMIT_FILE_SIZE' ? '超过 20MB 上限' : err.message) });
+    }
+    const main = req.files && req.files.file && req.files.file[0];
+    if (!main) return res.status(400).json({ error: '未收到 HTML 主文件' });
+    const head = main.buffer.subarray(0, 2048).toString('utf-8').toLowerCase();
+    if (!(/<!doctype html/.test(head) || /<html[\s>]/.test(head) || /<meta[\s>]/.test(head) || /<script[\s>]/.test(head))) {
+      return res.status(400).json({ error: '文件不像 HTML（头部缺少 doctype / html / meta / script），已拒绝' });
+    }
+    const body = req.body || {};
+    const title = String(body.title || '').trim()
+      || ((head.match(/<title[^>]*>([\s\S]{0,120}?)<\/title>/i) || [])[1] || '').trim()
+      || '未命名作品';
+    const code = String(body.code || '').trim();
+    const issue = Math.max(1, Math.min(99, toInt(body.issue_no, 1)));
+
+    // 目录名与扫描器约定一致：NN-代号-标题（重名自动 -2、-3）
+    const base = `${String(issue).padStart(2, '0')}-${slugify(code || '未名星', 20)}-${slugify(title)}`;
+    let dir = base, seq = 2;
+    while (fs.existsSync(path.join(WORKS_DIR, dir))) dir = `${base}-${seq++}`;
+
+    const destDir = path.join(WORKS_DIR, dir);
+    fs.mkdirSync(destDir, { recursive: true });
+    fs.writeFileSync(path.join(destDir, 'index.html'), main.buffer);
+    const savedAssets = [];
+    if ((req.files.assets || []).length) {
+      const assetsDir = path.join(destDir, 'assets');
+      fs.mkdirSync(assetsDir, { recursive: true });
+      for (const f of req.files.assets) {
+        const name = String(f.originalname || '').replace(/[\\/\u0000-\u001f]/g, '_');
+        fs.writeFileSync(path.join(assetsDir, name), f.buffer);
+        savedAssets.push('assets/' + name);
+      }
+    }
+    const meta = {
+      code, issue_no: issue, title,
+      summary: String(body.summary || ''),
+      members: String(body.members || ''),
+      tags: String(body.tags || ''),
+      published_at: body.published_at || new Date().toISOString().slice(0, 10),
+      mode: body.mode === 'window' ? 'window' : 'embed',
+      sort: toInt(body.sort, 10),
+      visible: (body.visible === '0' || body.visible === 0 || body.visible === 'false') ? 0 : 1
+    };
+    fs.writeFileSync(path.join(destDir, 'work.json'), JSON.stringify(meta, null, 2), 'utf-8');
+
+    let scanResult = null;
+    try { scanResult = scanner.scan({}); } catch (e) { scanResult = { error: e.message }; }
+    const sourceKey = `works/${dir}/index.html`.replace(/\\/g, '/').normalize('NFC');
+    const work = db.prepare('SELECT * FROM works WHERE source_key=?').get(sourceKey) || null;
+    res.json({ ok: true, dir: 'public/works/' + dir, assets: savedAssets, work, scan: scanResult });
   });
 });
 

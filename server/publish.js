@@ -64,7 +64,7 @@ function exportData() {
 
   // 书库：列表与详情共用同一全量数组（静态版前端自行过滤/分页）
   const withCover = b => {
-    if (b && !b.cover && covers.hasCover(b.call_no)) b.cover = '/covers/' + b.call_no + '.jpg';
+    if (b && !b.cover) { const u = covers.coverUrl(b.call_no); if (u) b.cover = u; }
     return b;
   };
   const books = db.prepare('SELECT * FROM books ORDER BY id').all().map(withCover);

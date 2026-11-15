@@ -53,6 +53,8 @@ window.GalaxyFly = (() => {
       if (this.isMobile) { this._prevDPR = g.renderer.getPixelRatio(); g.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5)); }
       g.camera.fov = this.reduced ? FOV_FLY : 55;
       g.camera.rotation.order = 'YXZ';
+      this.bindFullscreen();
+      this.enterFS();          // 必须在点击手势的同一调用栈内，否则浏览器拒绝
       this.startCinematic();
     }
 
@@ -68,6 +70,7 @@ window.GalaxyFly = (() => {
         <div class="fly-reticle"></div>
         <div class="fly-speed">速度 0.0</div>
         <div class="fly-hint">拖拽转向 · WASD / 方向键推进 · 滚轮加速 · Esc 退出</div>
+        <button class="fly-fs" title="切换全屏（F11 亦可）">⛶</button>
         <button class="fly-exit" title="退出漫游">✕ 退出漫游</button>
         <div class="fly-star-card" hidden></div>`;
       g.stageEl.appendChild(hud);
@@ -76,11 +79,48 @@ window.GalaxyFly = (() => {
       this.cardEl = hud.querySelector('.fly-star-card');
       this.reticleEl = hud.querySelector('.fly-reticle');
       hud.querySelector('.fly-exit').addEventListener('click', () => { if (window.Galaxy) window.Galaxy.exitFly(); });
+      hud.querySelector('.fly-fs').addEventListener('click', () => this.toggleFS());
       // 触发 letterbox 合拢 → 展开（电影感）
       requestAnimationFrame(() => {
         hud.classList.add('cine-on');
         setTimeout(() => hud.classList.remove('cine-on'), this.reduced ? 300 : 1400);
       });
+    }
+
+    // ---------- 全屏 ----------
+    // 目标：舞台 .star-stage 独占整屏。三条降级全部兜住，绝不阻断漫游。
+    fsEl() { return document.fullscreenElement || document.webkitFullscreenElement || null; }
+    bindFullscreen() {
+      // Esc 退出全屏被浏览器吞掉（页面收不到 keydown），fullscreenchange 是唯一可靠信号
+      this._onFSChange = () => {
+        if (this.fsEl()) return;
+        if (this._suppressFS) { this._suppressFS = false; return; }
+        if (this.mode === 'exit') return;                 // 我们自己收尾，别重复触发
+        if (window.Galaxy) window.Galaxy.exitFly();
+      };
+      document.addEventListener('fullscreenchange', this._onFSChange);
+      document.addEventListener('webkitfullscreenchange', this._onFSChange);
+    }
+    enterFS() {
+      const el = this.g.stageEl;
+      const req = el.requestFullscreen || el.webkitRequestFullscreen;
+      if (!req) { this.fsHint(); return; }                // 老 Safari / iPhone：元素全屏不存在
+      try {
+        const p = req.call(el, { navigationUI: 'hide' });
+        if (p && p.catch) p.catch(() => this.fsHint());   // iframe 无 allowfullscreen / 非手势调用
+      } catch (e) { this.fsHint(); }
+    }
+    exitFS() {
+      if (!this.fsEl()) return;
+      const exit = document.exitFullscreen || document.webkitExitFullscreen;
+      if (!exit) return;
+      try { const p = exit.call(document); if (p && p.catch) p.catch(() => {}); } catch (e) {}
+    }
+    toggleFS() { if (this.fsEl()) this.exitFS(); else this.enterFS(); }
+    fsHint() {
+      if (this._fsHinted) return;
+      this._fsHinted = true;
+      if (typeof window.toast === 'function') window.toast('浏览器未允许自动全屏（可能嵌在预览框里），可按 F11 手动全屏');
     }
 
     // ---------- 入场电影镜头（3.6s 样条穿越） ----------
@@ -144,7 +184,7 @@ window.GalaxyFly = (() => {
       const g = this.g;
       const el = g.renderer.domElement;
       this._onDown = e => {
-        if (e.target.closest && e.target.closest('.fly-exit,.fly-star-card')) return;
+        if (e.target.closest && e.target.closest('.fly-exit,.fly-fs,.fly-star-card')) return;
         this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
         if (!this.downPos) { this.downPos = { x: e.clientX, y: e.clientY }; this.downTime = performance.now(); }
         if (this.pointers.size === 2) { this.pinY = this.avgY(); }
@@ -429,11 +469,17 @@ window.GalaxyFly = (() => {
       window.removeEventListener('keydown', this._onKey);
       window.removeEventListener('keyup', this._onKeyUp);
       window.removeEventListener('blur', this._onBlur);
+      if (this._onFSChange) {
+        document.removeEventListener('fullscreenchange', this._onFSChange);
+        document.removeEventListener('webkitfullscreenchange', this._onFSChange);
+        this._onFSChange = null;
+      }
     }
     removeHUD() { if (this.hud && this.hud.parentNode) this.hud.remove(); }
     cleanup(keepCameraState) {
       this.unbind();
       this.removeHUD();
+      this.exitFS();   // 退出动画播完后收回全屏，回到正常视口
       const g = this.g;
       if (this.dust) { g.camera.remove(this.dust); this.dust.geometry.dispose(); this.dust.material.dispose(); this.dust = null; }
       if (this._prevDPR) { g.renderer.setPixelRatio(this._prevDPR); this._prevDPR = null; }
@@ -466,6 +512,8 @@ window.GalaxyFly = (() => {
     // 实例销毁：立刻清理、不播动画
     destroy(g) {
       if (rig && (!g || rig.g === g)) { rig.cleanup(false); rig = null; }
-    }
+    },
+    // VR 入口要先退出全屏：告诉 fullscreenchange 监听器这次是我们主动的，别当成用户按了 Esc
+    suppressNextFSExit() { if (rig) rig._suppressFS = true; }
   };
 })();

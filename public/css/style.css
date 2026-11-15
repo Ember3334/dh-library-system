@@ -494,6 +494,19 @@ body,#topbar,.card,.book-card,.btn,.nav-ai,.nav-theme,.chip,.tab,.modal,.ai-sear
 }
 .fly-hud.fly-on .fly-exit{opacity:.92}
 .fly-exit:hover{background:rgba(255,195,94,.2)}
+/* 漫游中的全屏开关（Esc 退回时用它重新进入） */
+.fly-hud .fly-fs{pointer-events:auto}
+.fly-fs{
+  position:absolute;right:120px;top:14px;width:30px;height:30px;border-radius:50%;font-size:13px;line-height:1;
+  display:grid;place-items:center;color:var(--sky-ink);background:rgba(12,18,32,.7);
+  border:1px solid rgba(180,200,255,.3);cursor:pointer;
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);
+  opacity:0;transition:opacity .4s,background .2s
+}
+.fly-hud.fly-on .fly-fs{opacity:.9}
+.fly-fs:hover{background:rgba(180,200,255,.22)}
+/* 全屏中的舞台：撑满视口（--star-h 与 80vh 上限在全屏下必须失效） */
+.star-stage:fullscreen,.star-stage:-webkit-full-screen{width:100vw;height:100vh;max-height:none;border-radius:0}
 /* 近星卡片 */
 .fly-star-card{
   position:absolute;transform:translate(-50%,-100%) translateY(-26px);width:min(280px,72vw);

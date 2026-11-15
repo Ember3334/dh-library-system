@@ -15,7 +15,8 @@ const XR_S = 0.07;          // 桌面单位 → 米
 const XR_TILT = -10 * Math.PI / 180;
 const XR_SINK = 0.9;        // 盘面下沉（米）
 const XR_PLAYER = [0, 0, 3.6]; // 站位（距核心 3.6m）
-const STRIDE = 3;           // 馆藏点降载采样（120k → 40k）
+const POINT_CAP = 3000;     // 超过这么多点才降载采样——书籍点只有数百个，抽稀会让 bookMeta 索引整体错位
+const XR_SPHERE_S = 0.12;   // 球芯半径的 XR 系数（比位置放大一点，5m 星系里才看得见）
 const LABEL_CULL_M = 12;    // 标签远距降透明
 
 // —— 坐标烘焙：缩放 + 倾斜 + 下沉 ——
@@ -67,15 +68,18 @@ export function enter(g, T) {
   if (g._xr) return;
   const xr = g._xr = { T, raycaster: new T.Raycaster() };
   xr.raycaster.params.Points.threshold = 0.2;
+  xr.raycaster.camera = g.camera;      // Sprite.raycast 需要它，缺了会报 "Raycaster.camera needs to be set"
+  xr._o = new T.Vector3(); xr._d = new T.Vector3();
 
-  // 1) 馆藏点云 → XR 副本（降载采样 + 烘焙）
+  // 1) 馆藏点云 → XR 副本（按需降载 + 烘焙）
   const bp = g.bookPoints;
   const srcAttr = bp.geometry.getAttribute('position');
   const src = srcAttr.array;
-  const n = Math.floor(srcAttr.count / STRIDE);
+  const step = srcAttr.count > POINT_CAP ? Math.ceil(srcAttr.count / POINT_CAP) : 1;
+  const n = Math.floor(srcAttr.count / step);
   const arr = new Float32Array(n * 3);
   for (let i = 0; i < n; i++) {
-    const j = i * STRIDE;
+    const j = i * step;
     const p = bake(src[j * 3], src[j * 3 + 1], src[j * 3 + 2]);
     arr[i * 3] = p[0]; arr[i * 3 + 1] = p[1]; arr[i * 3 + 2] = p[2];
   }
@@ -86,6 +90,7 @@ export function enter(g, T) {
   bp.geometry.computeBoundingSphere();
   xr.threshold = g.raycaster.params.Points.threshold;
   g.raycaster.params.Points.threshold = 0.2;
+  g.syncSpheres(XR_SPHERE_S);          // 球芯跟着烘焙坐标走
 
   // 2) 作品亮星
   xr.sprites = (g.workSprites || []).map(sp => ({ sp, p: sp.position.clone() }));
@@ -93,6 +98,7 @@ export function enter(g, T) {
     const p = bake(sp.position.x, sp.position.y, sp.position.z);
     sp.position.set(p[0], p[1], p[2]);
   });
+  g.syncWorkCores();
 
   // 3) 核心光球
   xr.coreScale = g.core1 ? g.core1.scale.x : null;
@@ -183,22 +189,27 @@ export function enter(g, T) {
 }
 
 // —— 手柄拾取（r160 无 setFromXRController，手写 origin/direction） ——
-function controllerRay(g, c, T) {
+// 统一返回 { userData, point }：Points 命中没有 userData，必须用 bookMeta[index] 补上，
+// 否则头显里书籍点永远点不开（桌面端 _pickHits 早就这么做了，XR 这条路之前漏了）。
+function controllerRay(g, c) {
   const xr = g._xr;
-  const o = new T.Vector3(), d = new T.Vector3();
-  c.getWorldPosition(o);
-  c.getWorldDirection(d);
-  xr.raycaster.ray.origin.copy(o);
-  xr.raycaster.ray.direction.copy(d);
-  const targets = [...(g.workSprites || []), g.bookPoints];
-  const hits = xr.raycaster.intersectObjects(targets, false);
-  return hits.length ? hits[0] : null;
+  c.getWorldPosition(xr._o);
+  c.getWorldDirection(xr._d);
+  xr.raycaster.ray.origin.copy(xr._o);
+  xr.raycaster.ray.direction.copy(xr._d);
+  const hitsW = xr.raycaster.intersectObjects(g.workSprites || [], false);
+  if (hitsW.length) return { userData: hitsW[0].object.userData || {}, point: hitsW[0].point };
+  const hits = xr.raycaster.intersectObject(g.bookPoints, false);
+  if (hits.length && hits[0].index != null && g.bookMeta[hits[0].index]) {
+    return { userData: g.bookMeta[hits[0].index], point: hits[0].point };
+  }
+  return null;
 }
 function selectByController(g, c) {
   if (!g || g.disposed || !g._xr) return;
-  const hit = controllerRay(g, c, g._xr.T);
+  const hit = controllerRay(g, c);
   if (!hit) return;
-  const u = hit.object.userData || {};
+  const u = hit.userData || {};
   if (u.work) location.hash = '#/work/' + u.work.id;
   else if (u.book) location.hash = '#/library';
 }
@@ -209,7 +220,7 @@ export function frameUpdate(g) {
   if (!xr || !xr.T || !xr.raycaster) return;
   for (const c of xr.controllers) {
     const ret = c.userData._ret;
-    const hit = controllerRay(g, c, xr.T);
+    const hit = controllerRay(g, c);
     if (hit) {
       ret.visible = true;
       c.worldToLocal(ret.position.copy(hit.point));
@@ -235,6 +246,8 @@ export function leave(g) {
   bp.geometry.computeBoundingSphere();
   g.raycaster.params.Points.threshold = xr.threshold;
   if (xr.sprites) xr.sprites.forEach(({ sp, p }) => sp.position.copy(p));
+  g.syncWorkCores();          // 实心核跟着回到桌面坐标
+  g.syncSpheres(1);           // 球芯半径与位置一并还原
   if (xr.coreScale && g.core1) g.core1.scale.setScalar(xr.coreScale);
   if (xr.ambientArr) {
     const aAttr = g.ambient.geometry.getAttribute('position');
@@ -277,6 +290,12 @@ export function createXRButton(g) {
       return;
     }
     try {
+      // 全屏与沉浸式会话互斥：先收回全屏，并告知监听器这次是主动的
+      // （否则 fullscreenchange 会把它当成"用户按了 Esc"从而退出漫游）
+      if (document.fullscreenElement) {
+        if (window.GalaxyFly) window.GalaxyFly.suppressNextFSExit();
+        try { await document.exitFullscreen(); } catch (e) {}
+      }
       g.renderer.xr.setReferenceSpaceType('local-floor');
       const session = await navigator.xr.requestSession('immersive-vr', {
         optionalFeatures: ['local-floor', 'bounded-floor', 'hand-tracking', 'layers']

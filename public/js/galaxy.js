@@ -55,6 +55,14 @@ const GALAXY = (() => {
     };
   }
 
+  // FNV-1a → 0..1：让同一本书每次刷新拿到同一个尺寸（位置是随机的，尺寸不该跟着乱跳）
+  function hash01(s) {
+    const str = String(s == null ? '' : s);
+    let h = 2166136261;
+    for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
+    return ((h >>> 0) % 10007) / 10007;
+  }
+
   class Galaxy {
     constructor(canvas, books, opts) {
       this.canvas = canvas;
@@ -82,6 +90,7 @@ const GALAXY = (() => {
       this.tip.className = 'star-tip';
       el.appendChild(this.tip);
 
+      this.buildLights();
       this.buildCore();
       this.buildBooks();
       this.buildWorks();
@@ -113,6 +122,18 @@ const GALAXY = (() => {
 
     get stageEl() { return this.canvas.parentElement; }
 
+    // 场景首次有光源：只作用于实体球（Phong 材质），Sprite 与 Points 完全不受影响
+    buildLights() {
+      this.hemi = new T.HemisphereLight(0xcfe0ff, 0x1a1524, 0.95);
+      this.scene.add(this.hemi);
+      this.keyLight = new T.DirectionalLight(0xfff2dc, 1.15);
+      this.keyLight.position.set(70, 90, 50);
+      this.scene.add(this.keyLight);
+      this.rimLight = new T.DirectionalLight(0x6f7fbf, 0.55);
+      this.rimLight.position.set(-80, -30, -60);
+      this.scene.add(this.rimLight);
+    }
+
     buildCore() {
       const mkGlow = (color, inner, scale) => {
         const c = document.createElement('canvas'); c.width = c.height = 256;
@@ -139,10 +160,12 @@ const GALAXY = (() => {
       const N = sorted.length + 1;
       const Rmax = 72;
       const cap = this.isMobile ? 36000 : 120000;
-      const positions = [], colors = [], meta = [];
+      const BASE_R = [0.92, 0.84, 0.76, 0.68];   // 分类基半径：藏书越多的旋臂，球体越大
+      const positions = [], colors = [], meta = [], radii = [];
       sorted.forEach(([key, arr], k) => {
         const base = (k / N) * Math.PI * 2;
         const col = new T.Color(colorForCat(key));
+        const baseR = BASE_R[k] !== undefined ? BASE_R[k] : 0.72;
         const step = arr.length > cap ? Math.ceil(arr.length / cap) : 1;
         arr.forEach((b, j) => {
           if (j % step) return;
@@ -153,25 +176,77 @@ const GALAXY = (() => {
           positions.push(p.x, p.y, p.z);
           colors.push(c.r, c.g, c.b);
           meta.push({ book: b });
+          radii.push(baseR * (0.80 + 0.40 * hash01(b.call_no || b.id)));
         });
       });
       this.bookMeta = meta;
+      this.bookRadius = radii;
+
+      // ① 光晕层：原来的 Points 缩成一层很淡的光。
+      //    它同时是「宽松拾取代理」——阈值 1.6 的命中区比精确球体好点太多，
+      //    hover / 点击 / 漫游点选 / VR 手柄全都还走它，拾取链路一行不用改。
       const geo = new T.BufferGeometry();
       geo.setAttribute('position', new T.Float32BufferAttribute(positions, 3));
       geo.setAttribute('color', new T.Float32BufferAttribute(colors, 3));
       const mat = new T.PointsMaterial({
-        size: 1.5, map: starTexture(), vertexColors: true, transparent: true,
+        size: 2.2, map: starTexture(), vertexColors: true, transparent: true, opacity: 0.45,
         depthWrite: false, blending: T.AdditiveBlending, sizeAttenuation: true
       });
       this.bookPoints = new T.Points(geo, mat);
+      this.bookPoints.name = 'book-halo';
       this.scene.add(this.bookPoints);
+
+      // ② 球芯层：实体星球，逐实例颜色 + 逐实例半径，单 draw call
+      const seg = this.isMobile ? [10, 7] : [14, 10];
+      const sg = new T.SphereGeometry(1, seg[0], seg[1]);
+      const sm = new T.MeshPhongMaterial({ shininess: 26, specular: 0x222233 });
+      this.bookSpheres = new T.InstancedMesh(sg, sm, meta.length);
+      this.bookSpheres.name = 'book-spheres';
+      const c0 = new T.Color();
+      meta.forEach((m, i) => {
+        c0.setRGB(colors[i * 3], colors[i * 3 + 1], colors[i * 3 + 2]);
+        this.bookSpheres.setColorAt(i, c0);
+      });
+      if (this.bookSpheres.instanceColor) this.bookSpheres.instanceColor.needsUpdate = true;
+      this.scene.add(this.bookSpheres);
+      this.syncSpheres(1);
+    }
+
+    // 球体矩阵同步：位置永远以 bookPoints 的位置属性为唯一真相（XR 换掉它后调用即可整体跟随）
+    syncSpheres(radiusScale) {
+      if (!this.bookSpheres || !this.bookPoints) return;
+      const s = radiusScale == null ? (this._sphereScale || 1) : radiusScale;
+      this._sphereScale = s;
+      const pos = this.bookPoints.geometry.attributes.position;
+      const total = this.bookSpheres.count;
+      const n = Math.min(total, pos.count);
+      const m = this._sm4 || (this._sm4 = new T.Matrix4());
+      const q = this._sq || (this._sq = new T.Quaternion());
+      const v = this._sv || (this._sv = new T.Vector3());
+      const sc = this._ss || (this._ss = new T.Vector3());
+      for (let i = 0; i < n; i++) {
+        v.set(pos.getX(i), pos.getY(i), pos.getZ(i));
+        sc.setScalar((this.bookRadius[i] || 0.72) * s);
+        m.compose(v, q, sc);
+        this.bookSpheres.setMatrixAt(i, m);
+      }
+      if (n < total) {   // 极端降载：多余实例缩到 0 藏起来
+        v.set(0, 0, 0); sc.setScalar(0);
+        m.compose(v, q, sc);
+        for (let i = n; i < total; i++) this.bookSpheres.setMatrixAt(i, m);
+      }
+      this.bookSpheres.instanceMatrix.needsUpdate = true;
+      this.bookSpheres.computeBoundingSphere();
+      this.bookSpheres.visible = n > 0;
     }
 
     buildWorks() {
       const Rmax = 80;
       const base = (WORK_ARM / (WORK_ARM + 1)) * Math.PI * 2 + 0.6;
       const tex = starTexture();
+      const coreGeo = new T.SphereGeometry(1, 16, 12);
       this.workSprites = [];
+      this.workCores = [];
       this.works.slice(0, 12).forEach((w, i) => {
         const t = 0.3 + 0.6 * (i / Math.max(1, Math.min(11, this.works.length - 1) || 1));
         const p = armPos(base, t, Rmax, 0.25);
@@ -186,6 +261,16 @@ const GALAXY = (() => {
         sp.userData = { work: w };
         this.scene.add(sp);
         this.workSprites.push(sp);
+        // 作品也做实：实心核 + 外面那层脉动的光晕
+        const core = new T.Mesh(coreGeo, new T.MeshPhongMaterial({
+          color: 0xfff1cd, emissive: 0x8a5a12, shininess: 64, specular: 0xffe6b0
+        }));
+        core.scale.setScalar(1.5);
+        core.position.copy(sp.position);
+        core.userData = { work: w };
+        this.scene.add(core);
+        this.workCores.push(core);
+        sp.userData.core = core;
         // HTML 标签（点击直达作品）
         const label = document.createElement('div');
         label.className = 'galaxy-label';
@@ -193,6 +278,14 @@ const GALAXY = (() => {
         label.addEventListener('click', () => { location.hash = '#/work/' + w.id; });
         this.stageEl.appendChild(label);
         this.labels.push({ el: label, pos: sp.position });
+      });
+    }
+
+    // 作品实心核跟随亮星位置（XR 烘焙会移动 sprite，核必须一起走）
+    syncWorkCores() {
+      (this.workSprites || []).forEach(sp => {
+        const core = sp.userData && sp.userData.core;
+        if (core) core.position.copy(sp.position);
       });
     }
 
@@ -430,6 +523,11 @@ const GALAXY = (() => {
       if (this.tip && this.tip.parentNode) this.tip.remove();
       const vrBtn = this.stageEl.querySelector('.vr-button');
       if (vrBtn) vrBtn.remove();
+      // 全屏残留：离开 #/home 时舞台会被移除，必须主动收回（否则整页卡在一个空元素的全屏态里）
+      const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+      if (fsEl && this.stageEl && (fsEl === this.stageEl || this.stageEl.contains(fsEl))) {
+        try { (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) {}
+      }
       try { this.renderer.dispose(); } catch (e) {}
       instance = null;
     }

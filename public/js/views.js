@@ -646,7 +646,7 @@ const Views = (() => {
     const items = known.length
       ? known.map(c => `<span><i class="dot" style="background:${colorForCat(c.category)}"></i>${esc(c.category)}</span>`).join('')
       : `<span><i class="dot" style="background:${STAR_PALETTE.default}"></i>馆藏</span>`;
-    box.innerHTML = items + `<span><i class="dot" style="background:#e8a53c"></i>摘星辰作品</span><span>✨ 点击星球直达版块</span>`;
+    box.innerHTML = items + `<span><i class="dot" style="background:#e8a53c"></i>摘星辰作品</span><span>✨ 球越大＝该分类馆藏越多 · 点击直达</span>`;
   }
   function cleanupStars() { if (starScene) { starScene.destroy(); starScene = null; } }
 
@@ -1044,6 +1044,7 @@ const Views = (() => {
       </div>
       <div class="tabs">
         <span class="tab active" data-t="works">✨ 摘星辰作品</span>
+        <span class="tab" data-t="books">📚 馆藏图书</span>
         <span class="tab" data-t="posts">📰 资讯</span>
         <span class="tab" data-t="settings">🎛 站点文案</span>
         <span class="tab" data-t="media">🗂 媒体库</span>
@@ -1053,6 +1054,7 @@ const Views = (() => {
     $('#logout-manage').onclick = () => { State.clearManage(); toast('已退出管理端', 'ok'); location.hash = '#/home'; };
     const render = (t) => {
       if (t === 'works') return manageWorksPanel();
+      if (t === 'books') return manageBooksPanel();
       if (t === 'posts') return managePostsPanel();
       if (t === 'settings') return manageSettingsPanel();
       if (t === 'media') return manageMediaPanel();
@@ -1113,6 +1115,17 @@ const Views = (() => {
     const codes = window.STAR_CODES || [];
     openModal(`<h3>${isEdit ? '编辑作品' : '新增摘星辰作品'}</h3>
       <div class="form">
+        ${isEdit ? '' : `
+        <div style="background:rgba(120,150,255,.08);border:1px dashed rgba(120,150,255,.35);border-radius:10px;padding:12px">
+          <b style="font-size:13px">🚀 推荐：直接上传 HTML，平台自动建作品目录</b>
+          <div class="upload-row" style="margin-top:8px">
+            <label class="btn ghost sm" style="display:inline-block">选择 HTML 文件<input id="w-html" type="file" accept=".html,.htm" hidden></label>
+            <label class="btn ghost sm" style="display:inline-block">附加资源（可多选）<input id="w-assets" type="file" multiple hidden></label>
+            <span class="muted" id="w-html-name" style="font-size:12px"></span>
+          </div>
+          <div class="muted" id="w-html-hint" style="font-size:12px;margin-top:6px">上传后自动创建 public/works/期号-代号-标题/ 并扫描入库，无需手工放文件</div>
+          <button class="btn sm" id="w-html-go" style="margin-top:8px" disabled>上传并创建作品目录</button>
+        </div>`}
         <label>作品标题 *</label><input id="w-title" value="${escAttr(w ? w.title : '')}">
         <div class="form-row">
           <div><label>期数</label><input id="w-issue" type="number" min="1" value="${w ? w.issue_no : 1}"></div>
@@ -1176,6 +1189,41 @@ const Views = (() => {
         toast('封面上传成功', 'ok');
       } catch (err) { toast(err.message, 'err'); }
     };
+    // —— HTML 直传建目录（仅新增态） ——
+    if (!isEdit) {
+      let htmlFile = null;
+      const nameEl = $('#w-html-name'), goBtn = $('#w-html-go');
+      $('#w-html').onchange = e => {
+        htmlFile = e.target.files[0] || null;
+        nameEl.textContent = htmlFile ? `已选：${htmlFile.name}（${(htmlFile.size / 1024).toFixed(0)} KB）` : '';
+        goBtn.disabled = !htmlFile;
+      };
+      goBtn.onclick = async () => {
+        if (!htmlFile) return;
+        const assets = Array.from(($('#w-assets').files) || []);
+        const hint = $('#w-html-hint');
+        goBtn.disabled = true;
+        hint.textContent = '上传中 0%…';
+        try {
+          const r = await API.uploadWorkHtml(htmlFile, assets, {
+            title: $('#w-title').value.trim(),
+            code: $('#w-code').value,
+            issue_no: $('#w-issue').value,
+            summary: $('#w-summary').value,
+            members: $('#w-members').value,
+            tags: $('#w-tags').value,
+            mode: $('#w-mode').value,
+            published_at: $('#w-date').value || ''
+          }, p => { hint.textContent = '上传中 ' + p + '%…'; });
+          hint.textContent = `✅ 已创建 ${r.dir}`;
+          toast(`作品目录已创建：${r.dir}`, 'ok');
+          setTimeout(() => { closeModal(); manageWorksPanel(); }, 900);
+        } catch (err) {
+          hint.textContent = '❌ ' + err.message;
+          goBtn.disabled = false;
+        }
+      };
+    }
     $('#w-save').onclick = async () => {
       const payload = {
         title: $('#w-title').value.trim(), issue_no: $('#w-issue').value, code: $('#w-code').value,
@@ -1189,6 +1237,150 @@ const Views = (() => {
         await API.saveWork(isEdit ? w.id : null, payload);
         closeModal(); toast('已保存', 'ok'); manageWorksPanel();
       } catch (e) { toast(e.message, 'err'); }
+    };
+  }
+
+  // ---- 馆藏图书管理 ----
+  const bookState = { q: '', page: 1 };
+  async function manageBooksPanel() {
+    const body = $('#manage-body');
+    body.innerHTML = '<div class="empty"><span class="spin"></span> 加载中…</div>';
+    try {
+      if (!window.__CATS__) {
+        const cs = await API.categories();
+        window.__CATS__ = (cs || []).map(c => c.category).filter(Boolean);
+      }
+    } catch (e) {}
+    let r;
+    try { r = await API.manageBooks(bookState.q, bookState.page, 20); }
+    catch (e) { body.innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+    const items = r.items || [];
+    body.innerHTML = `
+      <div class="manage-bar">
+        <input id="bk-q" placeholder="搜索 书名 / 作者 / 索书号 / 标签" value="${escAttr(bookState.q)}" style="max-width:260px">
+        <span class="muted" style="font-size:13px">共 ${r.total} 本 · 文件夹约定：封面 → public/covers/索书号.jpg</span>
+        <div style="display:flex;gap:8px">
+          <button class="btn ghost sm" id="bk-import">⇪ 批量导入</button>
+          <button class="btn" id="add-book">+ 新增图书</button>
+        </div>
+      </div>
+      <div class="card" style="padding:0;overflow:auto"><table>
+        <thead><tr><th>索书号</th><th>书名</th><th>作者</th><th>分类</th><th>复本</th><th>封面</th><th>操作</th></tr></thead>
+        <tbody>${items.map(b => `<tr>
+          <td class="muted" style="font-size:12px">${esc(b.call_no || '—')}</td>
+          <td>${esc(b.title)}</td>
+          <td>${esc(b.author || '—')}</td>
+          <td>${esc(b.category || '—')}</td>
+          <td>${b.available}/${b.total}</td>
+          <td>${b.cover ? '🖼️' : '—'}</td>
+          <td class="row-actions"><button class="btn ghost sm" data-bedit="${b.id}">编辑</button>
+            <button class="btn ghost sm" data-bdel="${b.id}">删除</button></td>
+        </tr>`).join('') || '<tr><td colspan="7"><div class="empty">没有找到相关图书</div></td></tr>'}</tbody></table></div>
+      ${buildPager(r.page, r.pages || 1, r.total, '本')}`;
+    const qEl = $('#bk-q');
+    const doSearch = () => { bookState.q = qEl.value.trim(); bookState.page = 1; manageBooksPanel(); };
+    qEl.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+    $('#add-book').onclick = () => bookForm(null);
+    $('#bk-import').onclick = importBooksModal;
+    $$('[data-bedit]').forEach(b => b.onclick = () => bookForm(items.find(x => String(x.id) === b.dataset.bedit)));
+    $$('[data-bdel]').forEach(b => b.onclick = async () => {
+      if (!confirm('确认删除这本图书？（只删数据库记录，封面文件保留在 public/covers/）')) return;
+      try { await API.deleteBook(b.dataset.bdel); toast('已删除', 'ok'); manageBooksPanel(); } catch (e) { toast(e.message, 'err'); }
+    });
+    $$('#manage-body .pg[data-p]').forEach(b => b.onclick = () => { bookState.page = +b.dataset.p; manageBooksPanel(); });
+  }
+
+  function bookForm(b) {
+    const isEdit = !!b;
+    openModal(`<h3>${isEdit ? '编辑图书' : '新增图书'}</h3>
+      <div class="form">
+        <div class="form-row">
+          <div><label>索书号（封面文件名用它）</label><input id="b-call" value="${escAttr(b ? b.call_no : '')}" placeholder="如 I1-01"></div>
+          <div><label>书名 *</label><input id="b-title" value="${escAttr(b ? b.title : '')}"></div>
+        </div>
+        <div class="form-row">
+          <div><label>作者</label><input id="b-author" value="${escAttr(b ? b.author : '')}"></div>
+          <div><label>出版社</label><input id="b-pub" value="${escAttr(b ? b.publisher : '')}"></div>
+        </div>
+        <div class="form-row">
+          <div><label>出版年份</label><input id="b-year" value="${escAttr(b ? b.year : '')}"></div>
+          <div><label>定价</label><input id="b-price" value="${escAttr(b ? b.price : '')}"></div>
+        </div>
+        <div class="form-row">
+          <div><label>分类</label><input id="b-cat" value="${escAttr(b ? b.category : '')}" list="cat-list" placeholder="如 文学类 / 艺术类 / 历史">
+            <datalist id="cat-list">${(window.__CATS__ || []).map(c => `<option value="${escAttr(c)}">`).join('')}</datalist></div>
+          <div><label>ISBN</label><input id="b-isbn" value="${escAttr(b ? b.isbn : '')}"></div>
+        </div>
+        <div class="form-row">
+          <div><label>馆藏位置</label><input id="b-loc" value="${escAttr(b ? b.location : '')}"></div>
+          <div><label>标签（逗号分隔）</label><input id="b-tags" value="${escAttr(b ? b.tags : '')}"></div>
+        </div>
+        <div class="form-row">
+          <div><label>复本总数</label><input id="b-total" type="number" min="0" value="${b ? b.total : 1}"></div>
+          <div><label>当前可借</label><input id="b-avail" type="number" min="0" value="${b ? b.available : 1}"></div>
+        </div>
+        <label>简介</label><textarea id="b-intro" rows="3">${esc(b ? b.intro : '')}</textarea>
+        <label>封面（上传后落 public/covers/&lt;索书号&gt;.jpg，书库自动显示真图）</label>
+        <div class="upload-row">
+          <input id="b-cover" value="${escAttr(b ? b.cover : '')}" placeholder="/covers/... 或 /media/img/... 或留空">
+          <label class="btn ghost sm" style="display:inline-block;white-space:nowrap">上传封面<input id="b-cover-file" type="file" accept="image/png,image/jpeg,image/webp" hidden></label>
+        </div>
+        <div class="muted" id="b-cover-hint" style="font-size:12px">${isEdit ? '提示：索书号未填时无法上传封面' : 'png / jpg / webp ≤ 5MB'}</div>
+        <button class="btn" id="b-save">保存</button>
+      </div>`);
+    $('#b-cover-file').onchange = async e => {
+      const file = e.target.files[0]; if (!file) return;
+      const callNo = $('#b-call').value.trim();
+      const hint = $('#b-cover-hint');
+      if (!callNo) { hint.textContent = '❌ 请先填写索书号再上传封面'; return; }
+      hint.textContent = '上传中…';
+      try {
+        const r = await API.uploadCover(file, callNo, p => { hint.textContent = '上传中 ' + p + '%…'; });
+        $('#b-cover').value = r.url;
+        hint.textContent = '✅ 已保存到 ' + r.url;
+      } catch (err) { hint.textContent = '❌ ' + err.message; }
+    };
+    $('#b-save').onclick = async () => {
+      const payload = {
+        call_no: $('#b-call').value.trim(), title: $('#b-title').value.trim(),
+        author: $('#b-author').value.trim(), publisher: $('#b-pub').value.trim(),
+        year: $('#b-year').value.trim(), price: $('#b-price').value.trim(),
+        category: $('#b-cat').value.trim(), isbn: $('#b-isbn').value.trim(),
+        location: $('#b-loc').value.trim(), tags: $('#b-tags').value.trim(),
+        total: $('#b-total').value, available: $('#b-avail').value,
+        intro: $('#b-intro').value, cover: $('#b-cover').value.trim()
+      };
+      try {
+        await API.saveBook(isEdit ? b.id : null, payload);
+        closeModal(); toast('已保存', 'ok'); manageBooksPanel();
+      } catch (e) { toast(e.message, 'err'); }
+    };
+  }
+
+  function importBooksModal() {
+    openModal(`<h3>⇪ 批量导入图书</h3>
+      <div class="form">
+        <label>粘贴 JSON 数组 或 CSV 文本（含表头；索书号相同则更新，否则新增）</label>
+        <textarea id="imp-text" rows="10" placeholder="索书号,书名,作者,出版社,年份,定价,分类,标签,馆藏位置,简介
+I1-01,平凡的世界,路遥,北京十月文艺出版社,2017,108,文学类,茅盾文学奖,一楼A区,中国乡土小说里程碑之作
+I1-02,乡土中国,费孝通,北京大学出版社,2012,28,文学类,社会学,一楼A区,"></textarea>
+        <div class="form-row">
+          <div><label>格式</label><select id="imp-format"><option value="">自动识别</option><option value="csv">CSV</option><option value="json">JSON</option></select></div>
+          <div><label>&nbsp;</label><button class="btn" id="imp-go">开始导入</button></div>
+        </div>
+        <div class="muted" id="imp-hint" style="font-size:12px">CSV 表头列：索书号 / 书名* / 作者 / 出版社 / 年份 / 定价 / 分类 / 标签 / 馆藏位置 / 简介。JSON 形如 [{"call_no":"I1-01","title":"书名"}]。</div>
+      </div>`);
+    $('#imp-go').onclick = async () => {
+      const btn = $('#imp-go'), hint = $('#imp-hint');
+      btn.disabled = true;
+      hint.textContent = '导入中…';
+      try {
+        const r = await API.importBooks({ text: $('#imp-text').value, format: $('#imp-format').value || undefined });
+        const errs = (r.errors || []).length ? `<br>错误示例：${esc(r.errors.join('；'))}` : '';
+        hint.innerHTML = `✅ 新增 ${r.created} · 更新 ${r.updated} · 跳过 ${r.skipped}${errs}`;
+        toast(`导入完成：新增 ${r.created} / 更新 ${r.updated}`, 'ok');
+        setTimeout(() => { closeModal(); manageBooksPanel(); }, 1200);
+      } catch (e) { hint.textContent = '❌ ' + e.message; btn.disabled = false; }
     };
   }
 
@@ -1347,7 +1539,10 @@ const Views = (() => {
     body.innerHTML = `
       <div class="manage-bar">
         <span class="muted" style="font-size:13px">${files.length} 个文件 · 合计 ${mb(r.totalBytes)}</span>
-        <button class="btn ghost sm" id="media-reload">↻ 刷新</button>
+        <div style="display:flex;gap:8px">
+          <label class="btn ghost sm" style="display:inline-block">↑ 上传文件<input id="media-up" type="file" hidden></label>
+          <button class="btn ghost sm" id="media-reload">↻ 刷新</button>
+        </div>
       </div>
       ${files.length ? `<div class="card" style="padding:0;overflow:auto"><table>
         <thead><tr><th>路径</th><th>大小</th><th>引用</th><th>时间</th><th>操作</th></tr></thead>
@@ -1361,6 +1556,15 @@ const Views = (() => {
         : '<div class="empty" style="padding:36px">还没有上传任何文件<br><span class="muted">在「作品」或「资讯」里上传图片/视频后会出现在这里</span></div>'}
       <p class="muted" style="font-size:12px;margin-top:10px">被内容引用的文件删除后会变成坏链，需二次确认。作品 HTML 不放这里，请放 <code>public/works/</code>。</p>`;
     $('#media-reload').onclick = () => manageMediaPanel();
+    $('#media-up').onchange = async e => {
+      const file = e.target.files[0]; if (!file) return;
+      const kind = /^video\//i.test(file.type) ? 'video' : (/^image\//i.test(file.type) ? 'img' : 'file');
+      try {
+        const r = await API.upload(file, kind, p => { toast(`上传中 ${p}%`); });
+        toast('已上传：' + r.url, 'ok');
+        manageMediaPanel();
+      } catch (err) { toast(err.message, 'err'); }
+    };
     $$('[data-mdel]').forEach(b => b.onclick = async () => {
       const p = b.dataset.mdel, refs = +b.dataset.refs || 0;
       if (!confirm(refs ? `该文件被 ${refs} 处内容引用，删除后会变成坏链。仍要删除？` : '确认删除该文件？')) return;
