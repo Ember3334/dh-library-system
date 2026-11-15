@@ -142,15 +142,30 @@ function openBrowser(url) {
   try { spawn(cmd, args, { detached: true, stdio: 'ignore', windowsHide: true }).unref(); } catch (e) {}
 }
 
-/** 失败兜底：开一个可见控制台窗口跑前台模式，让错误直接可见 */
+/** 失败兜底：把命令写成一个 bat 再 start 它 —— 避免 cmd/start/cmd /k 三层引号嵌套 */
 function fallbackForeground(port) {
   say('· 后台启动未就绪，正在打开前台窗口以便查看报错…');
-  const inner = `"${process.execPath}" "${SERVER}"`;
+  ensureRuntime();
+  const bat = path.join(RUNTIME, 'foreground.bat');
+  // 内容用英文：bat 由 cmd 按 ANSI 解析，UTF-8 中文可能乱码
+  fs.writeFileSync(bat, [
+    '@echo off',
+    'chcp 65001 >nul',
+    'title ShuWen DH Platform - Debug',
+    `cd /d "${ROOT}"`,
+    `set "PORT=${port}"`,
+    `"${process.execPath}" "${SERVER}"`,
+    'echo.',
+    'echo [INFO] The service above has exited. The log above IS the error.',
+    'echo        Also check .runtime\\platform.log',
+    'pause',
+    ''
+  ].join('\r\n'), 'utf-8');
+  // 测试/无头环境只写 bat 不弹窗
+  if (process.env.DH_NO_OPEN === '1') { say(`· (已抑制弹窗) 前台调试脚本已生成：${bat}`); return; }
   try {
-    spawn('cmd', ['/c', 'start', '""', 'cmd', '/k', inner], {
-      cwd: ROOT, detached: true, stdio: 'ignore',
-      env: { ...process.env, PORT: String(port) }
-    }).unref();
+    // start 的第一个引号参数会被当成窗口标题，所以这里保持空字符串占位
+    spawn('cmd', ['/c', 'start', '', bat], { cwd: ROOT, detached: true, stdio: 'ignore', windowsHide: false }).unref();
   } catch (e) {
     say('✗ 无法自动打开前台窗口，请手动双击「启动平台.bat」查看报错');
   }
@@ -167,22 +182,94 @@ function checkNode() {
   say(`· Node.js ${process.versions.node} ✓`);
 }
 
+/**
+ * 找到可用的 npm：
+ * 1) PATH 里的 npm / npm.cmd
+ * 2) 当前 node 发行版自带的 npm-cli.js（完整安装版 node.exe 旁边有 node_modules/npm）
+ * 注意：裸 node.exe（有人只拷一个 exe 放进 PATH）旁边没有 npm，返回 null 并给指引
+ */
+function findNpm() {
+  const cmd = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  try {
+    if (spawnSync(cmd, ['--version'], { stdio: 'ignore' }).status === 0) {
+      return { cmd, args: [], shell: process.platform === 'win32' };
+    }
+  } catch (e) { /* 不在 PATH */ }
+  const bundled = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
+  if (fs.existsSync(bundled)) return { cmd: process.execPath, args: [bundled], shell: false };
+  return null;
+}
+
+function npmHint() {
+  say('✗ 未找到可用的 npm。');
+  say('  如果你只把一个 node.exe 拷进了 PATH（比如 D:\\node.exe），它是不带 npm 的；');
+  say('  请到 https://nodejs.org 安装完整版 Node.js（自带 npm），装完重新双击本入口。');
+  say('  （依赖目录 node_modules 已随项目提供时，日常启动不需要 npm。）');
+}
+
 function ensureDeps() {
   const dep = path.join(ROOT, 'node_modules', 'better-sqlite3');
   if (fs.existsSync(dep) && fs.existsSync(path.join(ROOT, 'node_modules', 'express'))) {
     say('· 依赖已就绪 ✓');
-    return;
+    return true;
   }
+  const npm = findNpm();
+  if (!npm) { say('· 首次运行需要安装依赖，但——'); npmHint(); process.exit(1); }
   say('· 首次运行，正在安装依赖（大约 1—3 分钟，只做一次）…');
-  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-  const r = spawnSync(npm, ['install', '--no-fund', '--no-audit'], {
-    cwd: ROOT, stdio: 'inherit', shell: process.platform === 'win32'
+  const r = spawnSync(npm.cmd, [...npm.args, 'install', '--no-fund', '--no-audit'], {
+    cwd: ROOT, stdio: 'inherit', shell: npm.shell
   });
   if (r.status !== 0) {
-    say('✗ 依赖安装失败。请检查网络，或在本目录执行：npm install');
+    say('✗ 依赖安装失败。请检查网络，或手动执行：npm install');
     process.exit(1);
   }
   say('· 依赖安装完成 ✓');
+  return true;
+}
+
+/**
+ * 原生模块 ABI 预检：换过 node 大版本后 better-sqlite3 会 ERR_DLOPEN_FAILED。
+ * v13+ 是 N-API 单二进制（ABI 无关），重装一次即永久解决。
+ */
+function ensureNative() {
+  const pkg = path.join(ROOT, 'node_modules', 'better-sqlite3');
+  if (!fs.existsSync(pkg)) return ensureDeps();   // 连包都没有，走依赖安装
+  try {
+    // 注意：better-sqlite3 是懒加载，require() 本身不加载二进制，
+    // 必须 new 一个实例才真正 dlopen —— 只 require 会漏检 ERR_DLOPEN_FAILED
+    const Better = require(pkg);
+    new Better(':memory:').close();
+    say('· 原生模块检查通过 ✓');
+    return true;
+  } catch (e) {
+    if (e.code !== 'ERR_DLOPEN_FAILED') {
+      say(`✗ better-sqlite3 加载异常：${e.message}`);
+      return false;
+    }
+    say('· 检测到 Node.js 版本升级导致原生模块不兼容，自动修复中…');
+    const npm = findNpm();
+    if (!npm) {
+      say('✗ 无法自动修复——');
+      npmHint();
+      say(`  或手动重装一次：删掉 node_modules\\better-sqlite3 后用 npm 装 better-sqlite3@latest`);
+      return false;
+    }
+    say('· 正在重装 better-sqlite3（约 10—40 秒，视网络）…');
+    // npm 对"版本已满足"的包不会重新下载 prebuilds —— 必须先删掉坏包再装
+    try { fs.rmSync(pkg, { recursive: true, force: true }); } catch (e2) { /* 尽力而为 */ }
+    const r = spawnSync(npm.cmd, [...npm.args, 'install', 'better-sqlite3@latest', '--no-fund', '--no-audit'], {
+      cwd: ROOT, stdio: 'inherit', shell: npm.shell
+    });
+    if (r.status !== 0) { say('✗ 自动修复失败（npm install 非零退出）'); return false; }
+    // 用独立子进程复检（本进程的 require 缓存已不可靠）
+    const check = spawnSync(process.execPath, ['-e', `new (require(${JSON.stringify(pkg)}))(':memory:').close()`], { stdio: 'ignore' });
+    if (check.status === 0) {
+      say('✓ 修复完成 ✓');
+      return true;
+    }
+    say('✗ 修复后仍无法加载，请把下面的信息反馈给开发者：');
+    return false;
+  }
 }
 
 // ---------- 主流程 ----------
@@ -194,6 +281,7 @@ async function start() {
 
   checkNode();
   ensureDeps();
+  ensureNative();
   ensureRuntime();
 
   // 1) 扫端口：先找自己，再找空位
