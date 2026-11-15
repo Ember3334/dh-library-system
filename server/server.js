@@ -5,15 +5,8 @@ const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
 
-// ---------- 零依赖 .env 加载（本地开发便捷；生产用环境变量注入） ----------
-(function loadEnv() {
-  const envPath = path.join(__dirname, '../.env');
-  if (!fs.existsSync(envPath)) return;
-  for (const line of fs.readFileSync(envPath, 'utf-8').split(/\r?\n/)) {
-    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
-    if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '');
-  }
-})();
+// ---------- .env 加载（与 scripts/launch.js 共用同一实现，避免读法不一致） ----------
+require('../scripts/env');
 
 const express = require('express');
 const cors = require('cors');
@@ -33,7 +26,7 @@ function withCover(b) {
 }
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = Number(process.env.PORT) || 3000;
 
 app.use(cors({
   origin: (origin, callback) => {
@@ -45,6 +38,14 @@ app.use(cors({
   allowedHeaders: ['Content-Type', 'Authorization'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS']
 }));
+
+// ---------- 身份探针 ----------
+// 启动器（scripts/launch.js）用它判断某个端口上跑的到底是不是本平台，
+// 而不是「端口有监听就当成自己」—— 那会把别人的服务误认成平台。
+app.get('/api/health', (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  res.json({ app: 'dh-platform', port: PORT, ver: require('../package.json').version, pid: process.pid });
+});
 
 app.use(express.json({ limit: '12mb' }));
 
@@ -580,9 +581,9 @@ const server = app.listen(PORT, () => {
 server.on('error', (e) => {
   if (e.code === 'EADDRINUSE') {
     console.error(`\n  ✗ 端口 ${PORT} 已被占用。`);
-    console.error(`    · 可能已有一个「数字人文平台」在跑 → 先打开 http://localhost:${PORT} 看看`);
-    console.error(`    · 或关掉占用端口的旧窗口/进程后重试`);
-    console.error(`    · 或在本目录 .env 里加一行 PORT=3001 换端口\n`);
+    console.error(`    不用手改配置：双击「启动平台.bat」或「数文拾光.vbs」，`);
+    console.error(`    启动器会先探测该端口上是不是本平台，不是就自动换到 3001/3002…`);
+    console.error(`    想手动停掉占用者：双击「停止平台.bat」\n`);
     process.exit(1);
   }
   throw e;

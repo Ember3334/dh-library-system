@@ -13,6 +13,9 @@ references/
 *.log
 .DS_Store
 
+# 运行态（启动器写入 PID 与日志，不入库）
+.runtime/
+
 # 环境变量（管理口令与签名密钥）
 .env
 data/founder.json

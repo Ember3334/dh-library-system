@@ -1,7 +1,10 @@
 @echo off
 chcp 65001 >nul
-title ShuWen DH Platform
+title ShuWen DH Platform - Diagnostic
 cd /d "%~dp0"
+
+rem Diagnostic entry. A visible window so errors are readable.
+rem Daily use: double-click ShuWen.vbs (hidden window instead).
 
 where node >nul 2>nul
 if errorlevel 1 (
@@ -15,5 +18,5 @@ if errorlevel 1 (
   exit /b 1
 )
 
-node "%~dp0scripts\launch.js"
+node "%~dp0scripts\launch.js" %*
 if errorlevel 1 pause
